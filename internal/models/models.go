@@ -74,6 +74,8 @@ type OAuthClient struct {
 	UserID string
 }
 
+func (OAuthClient) TableName() string { return "oauth_clients" }
+
 type OAuthToken struct {
 	ID        uint `gorm:"primaryKey"`
 	ClientID  string
@@ -83,6 +85,8 @@ type OAuthToken struct {
 	ExpiresIn time.Duration
 	CreatedAt time.Time
 }
+
+func (OAuthToken) TableName() string { return "oauth_tokens" }
 
 // BuildTopic constructs an MQTT topic from device/capability data.
 // action is either "state" or "command".

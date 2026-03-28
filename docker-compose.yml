@@ -19,7 +19,9 @@ services:
       - DATABASE_USER=${DB_USER}
       - DATABASE_PASSWORD=${DB_PASSWORD}
       - DATABASE_NAME=${DB_NAME}
-      - MQTT_BROKER=tcp://mqtt:1883
+      - MQTT_BROKER=${MQTT_BROKER}
+      - MQTT_USERNAME=${MQTT_USERNAME}
+      - MQTT_PASSWORD=${MQTT_PASSWORD}
       - VALKEY_ADDR=valkey:6379
     depends_on:
       - valkey

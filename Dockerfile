@@ -1,4 +1,4 @@
-FROM golang:1.24-alpine AS builder
+FROM golang:1.25-alpine AS builder
 
 WORKDIR /app
 
@@ -17,8 +17,8 @@ FROM alpine:latest
 
 WORKDIR /app
 
-# Copy the built executable
 COPY --from=builder /app/iot-server .
+COPY --from=builder /app/migrations ./migrations
 
 # Expose HTTP port
 EXPOSE 8080
