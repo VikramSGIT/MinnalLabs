@@ -1,10 +1,14 @@
 :80 {
-  root * /srv
+	root * /srv
 
-  @runtimeConfig path /config.js
-  header @runtimeConfig Cache-Control "no-store"
+	@config path /config.js
+	header @config Cache-Control "no-store"
 
-  try_files {path} /index.html
-  encode zstd gzip
-  file_server
+	try_files {path} /index.html
+
+	file_server {
+		precompressed br gzip
+	}
+
+	encode zstd gzip
 }
