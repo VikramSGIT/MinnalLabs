@@ -1,4 +1,4 @@
-import { ApiError, postJSON } from "../lib/api.js";
+import { ApiError, postJSON, requestJSON } from "../lib/api.js";
 
 function escapeHtml(value) {
   return String(value)
@@ -15,15 +15,50 @@ class HomeCreateForm extends HTMLElement {
     this.attachShadow({ mode: "open" });
     this.apiBaseUrl = "";
     this.user = null;
+    this.homes = [];
+    this.isLoadingHomes = true;
     this.isSubmitting = false;
+    this.selectedHomeId = "";
+    this.errorMessage = "";
+    this.formState = {
+      name: "",
+      wifiSsid: "",
+      wifiPassword: "",
+      mqttUsername: "",
+      mqttPassword: "",
+    };
   }
 
   connectedCallback() {
     this.render();
+    this.loadHomes();
   }
 
   render() {
     const username = this.user ? this.user.username : "Unknown user";
+    const existingHomesMarkup = this.isLoadingHomes
+      ? '<p class="hint">Loading previously created homes...</p>'
+      : this.homes.length > 0
+        ? `
+            <form id="existingHomeForm" class="stack">
+              <label>
+                Existing Homes
+                <select id="existingHome" name="existingHome">
+                  ${this.homes
+                    .map(
+                      (home) => `
+                        <option value="${home.home_id}" ${String(home.home_id) === this.selectedHomeId ? "selected" : ""}>
+                          ${escapeHtml(home.name)} (ID ${home.home_id})
+                        </option>
+                      `,
+                    )
+                    .join("")}
+                </select>
+              </label>
+              <button id="selectBtn" type="submit" class="secondary">Use Selected Home</button>
+            </form>
+          `
+        : '<p class="hint">No homes found yet. Create one below.</p>';
 
     this.shadowRoot.innerHTML = `
       <style>
@@ -54,6 +89,11 @@ class HomeCreateForm extends HTMLElement {
           line-height: 1.6;
         }
 
+        .stack {
+          display: grid;
+          gap: 18px;
+        }
+
         .badge {
           display: inline-flex;
           align-items: center;
@@ -70,6 +110,28 @@ class HomeCreateForm extends HTMLElement {
           margin-top: 24px;
           display: grid;
           gap: 18px;
+        }
+
+        .section {
+          margin-top: 24px;
+          padding: 20px;
+          border-radius: 18px;
+          border: 1px solid #dbeafe;
+          background: #f8fbff;
+        }
+
+        .section h3 {
+          margin: 0;
+          font-size: 1.1rem;
+        }
+
+        .section p {
+          margin-top: 8px;
+        }
+
+        .separator {
+          padding-top: 24px;
+          border-top: 1px solid #e2e8f0;
         }
 
         .grid {
@@ -95,7 +157,18 @@ class HomeCreateForm extends HTMLElement {
           background: #ffffff;
         }
 
-        input:focus {
+        select {
+          width: 100%;
+          padding: 0.9rem 1rem;
+          border-radius: 14px;
+          border: 1px solid #cbd5e1;
+          font: inherit;
+          color: #0f172a;
+          background: #ffffff;
+        }
+
+        input:focus,
+        select:focus {
           outline: 2px solid #93c5fd;
           outline-offset: 1px;
         }
@@ -111,9 +184,19 @@ class HomeCreateForm extends HTMLElement {
           cursor: pointer;
         }
 
+        button.secondary {
+          color: #1d4ed8;
+          background: #dbeafe;
+        }
+
         button:disabled {
           opacity: 0.65;
           cursor: wait;
+        }
+
+        .hint {
+          color: #0369a1;
+          font-size: 0.95rem;
         }
 
         .error {
@@ -123,44 +206,65 @@ class HomeCreateForm extends HTMLElement {
         }
       </style>
       <section class="panel">
-        <h2>Create Home</h2>
-        <p>Store the Wi-Fi network and the MQTT username/password that should be issued to devices for this home.</p>
+        <h2>Select Or Create Home</h2>
+        <p>Choose an existing home or create a new one with the Wi-Fi and MQTT credentials that should be issued to devices for that home.</p>
         <div class="badge">Signed in as ${escapeHtml(username)}</div>
+        <section class="section">
+          <h3>Previously Created Homes</h3>
+          <p>Pick a saved home if you want to enroll another device with the same credentials.</p>
+          ${existingHomesMarkup}
+        </section>
         <form id="homeForm">
-          <label>
-            Home Name
-            <input id="name" name="name" type="text" placeholder="Main House" required>
-          </label>
-          <div class="grid">
+          <div class="separator stack">
             <label>
-              Wi-Fi SSID
-              <input id="wifiSsid" name="wifiSsid" type="text" placeholder="Office Wi-Fi" required>
+              Home Name
+              <input id="name" name="name" type="text" placeholder="Main House" required>
             </label>
-            <label>
-              Wi-Fi Password
-              <input id="wifiPassword" name="wifiPassword" type="password" placeholder="Optional for open networks">
-            </label>
+            <div class="grid">
+              <label>
+                Wi-Fi SSID
+                <input id="wifiSsid" name="wifiSsid" type="text" placeholder="Office Wi-Fi" required>
+              </label>
+              <label>
+                Wi-Fi Password
+                <input id="wifiPassword" name="wifiPassword" type="password" placeholder="Optional for open networks">
+              </label>
+            </div>
+            <div class="grid">
+              <label>
+                MQTT Username
+                <input id="mqttUsername" name="mqttUsername" type="text" placeholder="Provided by you" required>
+              </label>
+              <label>
+                MQTT Password
+                <input id="mqttPassword" name="mqttPassword" type="password" placeholder="Provided by you" required>
+              </label>
+            </div>
           </div>
-          <div class="grid">
-            <label>
-              MQTT Username
-              <input id="mqttUsername" name="mqttUsername" type="text" placeholder="Provided by you" required>
-            </label>
-            <label>
-              MQTT Password
-              <input id="mqttPassword" name="mqttPassword" type="password" placeholder="Provided by you" required>
-            </label>
-          </div>
-          <div id="error" class="error" role="alert"></div>
+          <div id="error" class="error" role="alert">${escapeHtml(this.errorMessage)}</div>
           <button id="submitBtn" type="submit">Create Home</button>
         </form>
       </section>
     `;
 
     this.form = this.shadowRoot.getElementById("homeForm");
+    this.existingHomeForm = this.shadowRoot.getElementById("existingHomeForm");
+    this.existingHomeSelect = this.shadowRoot.getElementById("existingHome");
+    this.selectBtn = this.shadowRoot.getElementById("selectBtn");
     this.submitBtn = this.shadowRoot.getElementById("submitBtn");
     this.errorEl = this.shadowRoot.getElementById("error");
+    if (this.existingHomeForm) {
+      this.existingHomeForm.addEventListener("submit", (event) => this.handleExistingHomeSubmit(event));
+    }
+    if (this.existingHomeSelect) {
+      this.existingHomeSelect.addEventListener("change", () => {
+        this.selectedHomeId = this.existingHomeSelect.value;
+      });
+    }
     this.form.addEventListener("submit", (event) => this.handleSubmit(event));
+    this.form.addEventListener("input", () => this.captureFormState());
+    this.syncFormState();
+    this.setSubmitting(this.isSubmitting);
   }
 
   async handleSubmit(event) {
@@ -171,13 +275,14 @@ class HomeCreateForm extends HTMLElement {
 
     this.setError("");
     this.setSubmitting(true);
+    this.captureFormState();
 
     const payload = {
-      name: this.shadowRoot.getElementById("name").value.trim(),
-      wifi_ssid: this.shadowRoot.getElementById("wifiSsid").value.trim(),
-      wifi_password: this.shadowRoot.getElementById("wifiPassword").value,
-      mqtt_username: this.shadowRoot.getElementById("mqttUsername").value.trim(),
-      mqtt_password: this.shadowRoot.getElementById("mqttPassword").value,
+      name: this.formState.name.trim(),
+      wifi_ssid: this.formState.wifiSsid.trim(),
+      wifi_password: this.formState.wifiPassword,
+      mqtt_username: this.formState.mqttUsername.trim(),
+      mqtt_password: this.formState.mqttPassword,
     };
 
     try {
@@ -204,14 +309,107 @@ class HomeCreateForm extends HTMLElement {
     }
   }
 
+  async loadHomes() {
+    this.isLoadingHomes = true;
+    this.render();
+
+    try {
+      const response = await requestJSON("/api/enroll/homes", {}, this.apiBaseUrl);
+      this.homes = Array.isArray(response) ? response : [];
+      if (!this.selectedHomeId && this.homes.length > 0) {
+        this.selectedHomeId = String(this.homes[0].home_id);
+      }
+      this.setError("");
+    } catch (error) {
+      this.homes = [];
+      if (error instanceof ApiError && error.status === 401) {
+        this.dispatchEvent(
+          new CustomEvent("session-expired", {
+            bubbles: true,
+            composed: true,
+          }),
+        );
+      }
+      this.setError(error.message);
+    } finally {
+      this.isLoadingHomes = false;
+      this.render();
+    }
+  }
+
+  handleExistingHomeSubmit(event) {
+    event.preventDefault();
+    if (this.isLoadingHomes || this.homes.length === 0) {
+      return;
+    }
+
+    const home = this.homes.find((entry) => String(entry.home_id) === String(this.selectedHomeId || this.existingHomeSelect?.value || ""));
+    if (!home) {
+      this.setError("Select a home to continue.");
+      return;
+    }
+
+    this.setError("");
+    this.dispatchEvent(
+      new CustomEvent("home-selected", {
+        bubbles: true,
+        composed: true,
+        detail: home,
+      }),
+    );
+  }
+
+  captureFormState() {
+    this.formState = {
+      name: this.shadowRoot.getElementById("name")?.value || "",
+      wifiSsid: this.shadowRoot.getElementById("wifiSsid")?.value || "",
+      wifiPassword: this.shadowRoot.getElementById("wifiPassword")?.value || "",
+      mqttUsername: this.shadowRoot.getElementById("mqttUsername")?.value || "",
+      mqttPassword: this.shadowRoot.getElementById("mqttPassword")?.value || "",
+    };
+  }
+
+  syncFormState() {
+    const name = this.shadowRoot.getElementById("name");
+    const wifiSsid = this.shadowRoot.getElementById("wifiSsid");
+    const wifiPassword = this.shadowRoot.getElementById("wifiPassword");
+    const mqttUsername = this.shadowRoot.getElementById("mqttUsername");
+    const mqttPassword = this.shadowRoot.getElementById("mqttPassword");
+
+    if (name) {
+      name.value = this.formState.name;
+    }
+    if (wifiSsid) {
+      wifiSsid.value = this.formState.wifiSsid;
+    }
+    if (wifiPassword) {
+      wifiPassword.value = this.formState.wifiPassword;
+    }
+    if (mqttUsername) {
+      mqttUsername.value = this.formState.mqttUsername;
+    }
+    if (mqttPassword) {
+      mqttPassword.value = this.formState.mqttPassword;
+    }
+  }
+
   setSubmitting(isSubmitting) {
     this.isSubmitting = isSubmitting;
     this.submitBtn.disabled = isSubmitting;
     this.submitBtn.textContent = isSubmitting ? "Creating Home..." : "Create Home";
+    if (this.selectBtn) {
+      this.selectBtn.disabled = isSubmitting || this.isLoadingHomes || this.homes.length === 0;
+    }
+    if (this.existingHomeSelect) {
+      this.existingHomeSelect.disabled = isSubmitting || this.isLoadingHomes || this.homes.length === 0;
+    }
   }
 
   setError(message) {
-    this.errorEl.textContent = message;
+    this.errorMessage = message;
+    if (this.errorEl) {
+      this.errorEl.textContent = message;
+    }
   }
 }
 

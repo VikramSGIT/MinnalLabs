@@ -25,6 +25,7 @@ func SetupEnrollmentRoutes(r *gin.Engine, appCfg *config.Config) {
 
 		protected := api.Group("")
 		protected.Use(oauth.RequireSession())
+		protected.GET("/homes", listHomes)
 		protected.POST("/home", enrollHome)
 		protected.POST("/device", enrollDevice)
 	}
@@ -59,6 +60,33 @@ func enrollUser(c *gin.Context) {
 		"user_id":  user.ID,
 		"username": user.Username,
 	})
+}
+
+func listHomes(c *gin.Context) {
+	sessionUser, ok := oauth.CurrentSessionUser(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	var homes []models.Home
+	if err := db.DB.
+		Where("user_id = ?", sessionUser.UserID).
+		Order("name ASC, id ASC").
+		Find(&homes).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load homes"})
+		return
+	}
+
+	response := make([]gin.H, 0, len(homes))
+	for _, home := range homes {
+		response = append(response, gin.H{
+			"home_id": home.ID,
+			"name":    home.Name,
+		})
+	}
+
+	c.JSON(http.StatusOK, response)
 }
 
 func enrollHome(c *gin.Context) {

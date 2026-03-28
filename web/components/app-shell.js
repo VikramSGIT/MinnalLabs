@@ -46,7 +46,7 @@ class AppShell extends HTMLElement {
     const { user, home, isBootstrapping, sessionError } = this.state;
     const steps = [
       { label: "Login", status: user ? "complete" : "active" },
-      { label: "Create Home", status: user && !home ? "active" : home ? "complete" : "pending" },
+      { label: "Choose Home", status: user && !home ? "active" : home ? "complete" : "pending" },
       { label: "Enroll Device", status: home ? "active" : "pending" },
     ];
 
@@ -230,12 +230,12 @@ class AppShell extends HTMLElement {
             <div>
               <h1>IoT Enrollment</h1>
               <p class="subtitle">
-                Sign in, create a home with Wi-Fi and MQTT credentials, then provision a device over Web Bluetooth.
+                Sign in, choose or create a home with Wi-Fi and MQTT credentials, then provision a device over Web Bluetooth.
               </p>
             </div>
             <div class="actions">
               ${user ? '<button id="signOutBtn">Sign Out</button>' : ""}
-              ${home ? '<button id="resetHomeBtn" class="primary">Create Another Home</button>' : ""}
+              ${home ? '<button id="resetHomeBtn" class="primary">Change Home</button>' : ""}
             </div>
           </div>
           <div class="meta">
@@ -249,7 +249,7 @@ class AppShell extends HTMLElement {
             </article>
             <article class="card">
               <p class="eyebrow">Current Home</p>
-              <p class="value">${home ? `${escapeHtml(home.name)} (ID ${home.home_id})` : "Create a home to continue"}</p>
+              <p class="value">${home ? `${escapeHtml(home.name)} (ID ${home.home_id})` : "Select or create a home to continue"}</p>
             </article>
           </div>
           <div class="steps">
@@ -316,10 +316,12 @@ class AppShell extends HTMLElement {
       const homeForm = document.createElement("home-create-form");
       homeForm.apiBaseUrl = this.config.apiBaseUrl;
       homeForm.user = this.state.user;
-      homeForm.addEventListener("home-created", (event) => {
+      const handleHomeSelection = (event) => {
         this.state.home = event.detail;
         this.render();
-      });
+      };
+      homeForm.addEventListener("home-created", handleHomeSelection);
+      homeForm.addEventListener("home-selected", handleHomeSelection);
       stage.append(homeForm);
       return;
     }
