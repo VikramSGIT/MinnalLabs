@@ -1,36 +1,9 @@
-version: "3.8"
-
 services:
-  db:
-    image: postgres:15-alpine
-    container_name: iot-db
-    environment:
-      POSTGRES_USER: ${DB_USER:-iotuser}
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-iotpassword}
-      POSTGRES_DB: ${DB_NAME:-iotdb}
-    ports:
-      - "5432:5432"
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    restart: unless-stopped
-
-  mqtt:
-    image: eclipse-mosquitto:2
-    container_name: iot-mqtt
-    ports:
-      - "1883:1883"
-      - "9001:9001"
-    volumes:
-      - ./mosquitto/config:/mosquitto/config
-      - ./mosquitto/data:/mosquitto/data
-      - ./mosquitto/log:/mosquitto/log
-    restart: unless-stopped
-
   valkey:
     image: valkey/valkey:8-alpine
     container_name: iot-valkey
     ports:
-      - "6379:6379"
+      - 6379:6379
     volumes:
       - valkeydata:/data
     restart: unless-stopped
@@ -39,33 +12,18 @@ services:
     build: .
     container_name: iot-backend
     ports:
-      - "8080:8080"
+      - 8080:8080
     environment:
       - SERVER_PORT=8080
-      - DATABASE_HOST=db
-      - DATABASE_USER=${DB_USER:-iotuser}
-      - DATABASE_PASSWORD=${DB_PASSWORD:-iotpassword}
-      - DATABASE_NAME=${DB_NAME:-iotdb}
+      - DATABASE_HOST=${DATABASE_HOST}
+      - DATABASE_USER=${DB_USER}
+      - DATABASE_PASSWORD=${DB_PASSWORD}
+      - DATABASE_NAME=${DB_NAME}
       - MQTT_BROKER=tcp://mqtt:1883
       - VALKEY_ADDR=valkey:6379
     depends_on:
-      - db
-      - mqtt
       - valkey
     restart: unless-stopped
 
-  # Cloudflare Tunnel for Google external access
-  # Read DEPLOYMENT.md for setup instructions
-  cloudflared:
-    image: cloudflare/cloudflared:latest
-    container_name: iot-tunnel
-    command: tunnel --no-autoupdate run
-    environment:
-      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
-    restart: unless-stopped
-    depends_on:
-      - backend
-
 volumes:
-  pgdata:
   valkeydata:
