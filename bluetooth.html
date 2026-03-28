@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESP32 Device Provisioning</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f3f4f6;
+            color: #1f2937;
+        }
+        .container {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);
+        }
+        .header {
+            border-bottom: 1px solid #e5e7eb;
+            padding-bottom: 15px;
+            margin-bottom: 5px;
+        }
+        h1 { margin-top: 0; color: #111827; }
+        
+        .status-bar {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 15px;
+            background-color: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 6px;
+        }
+        .status-indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background-color: #ef4444; /* red for disconnected */
+        }
+        .status-indicator.connected {
+            background-color: #10b981; /* green for connected */
+        }
+        
+        .section {
+            border: 1px solid #e5e7eb;
+            border-radius: 6px;
+            padding: 20px;
+            position: relative;
+        }
+        .section-title {
+            position: absolute;
+            top: -12px;
+            left: 15px;
+            background: white;
+            padding: 0 10px;
+            font-size: 14px;
+            font-weight: 600;
+            color: #6b7280;
+        }
+        
+        .form-row {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            margin-bottom: 15px;
+        }
+        .form-row:last-child {
+            margin-bottom: 0;
+        }
+        .form-row label {
+            width: 140px;
+            font-weight: 500;
+            font-size: 14px;
+        }
+        .form-row input {
+            flex-grow: 1;
+            padding: 8px 12px;
+            font-size: 14px;
+            border: 1px solid #d1d5db;
+            border-radius: 4px;
+        }
+        .form-row input[readonly] {
+            background-color: #f3f4f6;
+            color: #6b7280;
+        }
+        
+        button {
+            padding: 8px 16px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            background-color: #3b82f6;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            transition: background-color 0.2s;
+        }
+        button:hover:not(:disabled) {
+            background-color: #2563eb;
+        }
+        button:disabled {
+            background-color: #9ca3af;
+            cursor: not-allowed;
+            opacity: 0.7;
+        }
+        .btn-send {
+            min-width: 80px;
+        }
+        .btn-danger {
+            background-color: #ef4444;
+        }
+        .btn-danger:hover:not(:disabled) {
+            background-color: #dc2626;
+        }
+        
+        #log {
+            width: 100%;
+            height: 200px;
+            padding: 15px;
+            background-color: #1e293b;
+            color: #e2e8f0;
+            border-radius: 6px;
+            overflow-y: auto;
+            font-family: "Fira Code", "Courier New", Courier, monospace;
+            font-size: 13px;
+            box-sizing: border-box;
+        }
+        .log-time { color: #94a3b8; margin-right: 8px; }
+        .log-info { color: #38bdf8; }
+        .log-success { color: #34d399; }
+        .log-error { color: #f87171; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>ESP32 Device Provisioning</h1>
+            <p style="color: #6b7280; margin: 5px 0 0 0;">Connect to your ESPHome device via Web Bluetooth to configure its settings.</p>
+        </div>
+        
+        <div class="status-bar">
+            <div id="statusIndicator" class="status-indicator"></div>
+            <strong id="statusText">Disconnected</strong>
+            <div style="flex-grow: 1;"></div>
+            <button id="connectBtn">Connect to Device</button>
+            <button id="disconnectBtn" disabled class="btn-danger">Disconnect</button>
+        </div>
+
+        <div class="section">
+            <div class="section-title">Device Info</div>
+            <div class="form-row">
+                <label for="productType">Product Type:</label>
+                <input type="text" id="productType" readonly placeholder="Waiting for connection...">
+                <button class="btn-send" id="btnReadProduct" disabled>Read</button>
+            </div>
+        </div>
+
+        <div class="section">
+            <div class="section-title">Configuration</div>
+            
+            <div class="form-row">
+                <label for="userId">User ID:</label>
+                <input type="text" id="userId" placeholder="Enter User ID">
+            </div>
+            
+            <div class="form-row">
+                <label for="deviceId">Device ID:</label>
+                <input type="text" id="deviceId" placeholder="Enter Device ID">
+            </div>
+            
+            <div class="form-row">
+                <label for="mqttUrl">MQTT URL:</label>
+                <input type="text" id="mqttUrl" placeholder="e.g., mqtt://broker.hivemq.com">
+            </div>
+            
+            <div class="form-row">
+                <label for="mqttUsername">MQTT Username:</label>
+                <input type="text" id="mqttUsername" placeholder="Enter MQTT Username">
+            </div>
+            
+            <div class="form-row">
+                <label for="mqttPassword">MQTT Password:</label>
+                <input type="password" id="mqttPassword" placeholder="Enter MQTT Password">
+            </div>
+            
+            <div class="form-row">
+                <label for="mqttPort">MQTT Port:</label>
+                <input type="text" id="mqttPort" placeholder="e.g., 1883" value="1883">
+            </div>
+            
+            <div class="form-row">
+                <label for="wifiSsid">Wi-Fi SSID:</label>
+                <input type="text" id="wifiSsid" placeholder="Network Name">
+            </div>
+            
+            <div class="form-row">
+                <label for="wifiPass">Wi-Fi Password:</label>
+                <input type="password" id="wifiPass" placeholder="Network Password">
+            </div>
+
+            <p style="color: #9ca3af; font-size: 12px; margin: 10px 0 0 0;">The device will automatically save and restart after sending.</p>
+            <div style="display: flex; justify-content: flex-end; margin-top: 5px;">
+                <button id="sendAllBtn" style="padding: 10px 24px; font-size: 15px;" disabled>Send All & Restart</button>
+            </div>
+        </div>
+
+        <div>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
+                <h3 style="margin: 0;">Operation Log</h3>
+                <button id="clearLogBtn" style="padding: 4px 8px; font-size: 12px; background: #64748b;">Clear</button>
+            </div>
+            <div id="log"></div>
+        </div>
+    </div>
+
+    <script>
+        // UUID Constants based on ESPHome YAML
+        const SERVICE_UUID = "12345678-1234-1234-1234-000000000000";
+        const UUIDS = {
+            "0001": "12345678-1234-1234-1234-000000000001", // Product Type (Read)
+            "0002": "12345678-1234-1234-1234-000000000002", // User ID
+            "0003": "12345678-1234-1234-1234-000000000003", // Device ID
+            "0004": "12345678-1234-1234-1234-000000000004", // MQTT URL
+            "0005": "12345678-1234-1234-1234-000000000005", // Wi-Fi SSID
+            "0006": "12345678-1234-1234-1234-000000000006", // Wi-Fi Password
+            "0007": "12345678-1234-1234-1234-000000000007", // MQTT Username
+            "0008": "12345678-1234-1234-1234-000000000008", // MQTT Password
+            "0009": "12345678-1234-1234-1234-000000000009", // MQTT Port
+            "000A": "12345678-1234-1234-1234-00000000000a"  // NVS Save & Restart
+        };
+
+        let bluetoothDevice = null;
+        let gattServer = null;
+        let mainService = null;
+
+        // UI Elements
+        const connectBtn = document.getElementById('connectBtn');
+        const disconnectBtn = document.getElementById('disconnectBtn');
+        const statusIndicator = document.getElementById('statusIndicator');
+        const statusText = document.getElementById('statusText');
+        const logArea = document.getElementById('log');
+        const btnReadProduct = document.getElementById('btnReadProduct');
+        const sendAllBtn = document.getElementById('sendAllBtn');
+
+        // Logging Utility
+        function log(message, type = 'info') {
+            const time = new Date().toLocaleTimeString();
+            const colorClass = type === 'error' ? 'log-error' : (type === 'success' ? 'log-success' : 'log-info');
+            logArea.innerHTML += `<div style="margin-bottom: 4px;"><span class="log-time">[${time}]</span><span class="${colorClass}">${message}</span></div>`;
+            logArea.scrollTop = logArea.scrollHeight;
+        }
+
+        document.getElementById('clearLogBtn').addEventListener('click', () => {
+            logArea.innerHTML = '';
+        });
+
+        // Enable/Disable UI Controls
+        function setControlsState(connected) {
+            connectBtn.disabled = connected;
+            disconnectBtn.disabled = !connected;
+            btnReadProduct.disabled = !connected;
+            sendAllBtn.disabled = !connected;
+
+            if (connected) {
+                statusIndicator.classList.add('connected');
+                statusText.innerText = "Connected";
+            } else {
+                statusIndicator.classList.remove('connected');
+                statusText.innerText = "Disconnected";
+                document.getElementById('productType').value = "";
+                mainService = null;
+                gattServer = null;
+            }
+        }
+
+        // Connect Logic
+        connectBtn.addEventListener('click', async () => {
+            try {
+                if (!navigator.bluetooth) {
+                    throw new Error('Web Bluetooth is not supported in this browser.');
+                }
+
+                log('Requesting device (filtering by name "minnallabs")...', 'info');
+                bluetoothDevice = await navigator.bluetooth.requestDevice({
+                    filters: [{ namePrefix: 'ml-' }],
+                    optionalServices: [SERVICE_UUID]
+                });
+
+                bluetoothDevice.addEventListener('gattserverdisconnected', onDisconnected);
+
+                log(`Connecting to GATT Server on ${bluetoothDevice.name}...`, 'info');
+                gattServer = await bluetoothDevice.gatt.connect();
+
+                log('Getting Main Custom Service...', 'info');
+                mainService = await gattServer.getPrimaryService(SERVICE_UUID);
+
+                log('Successfully connected and service found!', 'success');
+                setControlsState(true);
+
+                // Auto-read the product type upon connection
+                await readProductType();
+
+            } catch (error) {
+                log(`Connection failed: ${error}`, 'error');
+                setControlsState(false);
+            }
+        });
+
+        // Disconnect Logic
+        disconnectBtn.addEventListener('click', () => {
+            if (bluetoothDevice && bluetoothDevice.gatt.connected) {
+                bluetoothDevice.gatt.disconnect();
+            }
+        });
+
+        function onDisconnected() {
+            log('Device disconnected.', 'error');
+            setControlsState(false);
+        }
+
+        // Read Product Type Logic
+        async function readProductType() {
+            try {
+                log('Reading Product Type...', 'info');
+                const char = await mainService.getCharacteristic(UUIDS["0001"]);
+                const value = await char.readValue();
+                const decoder = new TextDecoder('utf-8');
+                const text = decoder.decode(value);
+                document.getElementById('productType').value = text;
+                log(`Product Type: ${text}`, 'success');
+            } catch (error) {
+                log(`Failed to read Product Type: ${error}`, 'error');
+            }
+        }
+
+        btnReadProduct.addEventListener('click', readProductType);
+
+        const CONFIG_FIELDS = [
+            { id: 'userId',       charKey: '0002', label: 'User ID' },
+            { id: 'deviceId',     charKey: '0003', label: 'Device ID' },
+            { id: 'mqttUrl',      charKey: '0004', label: 'MQTT URL' },
+            { id: 'mqttUsername',  charKey: '0007', label: 'MQTT Username' },
+            { id: 'mqttPassword', charKey: '0008', label: 'MQTT Password' },
+            { id: 'mqttPort',     charKey: '0009', label: 'MQTT Port' },
+            { id: 'wifiSsid',     charKey: '0005', label: 'Wi-Fi SSID' },
+            { id: 'wifiPass',     charKey: '0006', label: 'Wi-Fi Password' },
+        ];
+
+        sendAllBtn.addEventListener('click', async () => {
+            const fieldsToSend = CONFIG_FIELDS.filter(f => document.getElementById(f.id).value.trim() !== '');
+
+            if (fieldsToSend.length === 0) {
+                log('Nothing to send — all fields are empty.', 'error');
+                return;
+            }
+
+            btnState(true);
+            log(`Sending ${fieldsToSend.length} field(s)...`, 'info');
+            let successCount = 0;
+
+            for (const field of fieldsToSend) {
+                const value = document.getElementById(field.id).value.trim();
+                try {
+                    const char = await mainService.getCharacteristic(UUIDS[field.charKey]);
+                    const data = new TextEncoder().encode(value);
+                    await char.writeValue(data);
+                    log(`  ${field.label} — sent.`, 'success');
+                    successCount++;
+                } catch (error) {
+                    log(`  ${field.label} — failed: ${error}`, 'error');
+                }
+            }
+
+            log(`Done. ${successCount}/${fieldsToSend.length} fields written successfully.`, successCount === fieldsToSend.length ? 'success' : 'error');
+
+            if (successCount > 0) {
+                try {
+                    log('Triggering NVS save & restart...', 'info');
+                    const restartChar = await mainService.getCharacteristic(UUIDS["000A"]);
+                    await restartChar.writeValue(new TextEncoder().encode("1"));
+                    log('Device is saving and restarting...', 'success');
+                } catch (error) {
+                    log(`Failed to trigger restart: ${error}`, 'error');
+                }
+            }
+
+            btnState(false);
+        });
+
+        function btnState(disabled) {
+            const buttons = document.querySelectorAll('button');
+            buttons.forEach(b => {
+                // Keep disconnect button enabled if we are disabling others
+                if (b.id !== 'disconnectBtn' || !disabled) {
+                    // Only re-enable if we are connected
+                    if (!disabled && gattServer && !gattServer.connected && b.id !== 'connectBtn') {
+                        return;
+                    }
+                    b.disabled = disabled;
+                }
+            });
+        }
+    </script>
+</body>
+</html>

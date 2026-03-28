@@ -1,0 +1,326 @@
+esphome:
+  name: ml-smart-sensor-v1
+  friendly_name: presence sensor
+  on_boot:
+    priority: 200
+    then:
+      - logger.log:
+          format: "===== BOOT DEBUG ====="
+          level: INFO
+      - logger.log:
+          format: "g_wifi_ssid: [%s]"
+          args: ['id(g_wifi_ssid).c_str()']
+      - logger.log:
+          format: "g_wifi_password: [%s]"
+          args: ['id(g_wifi_password).c_str()']
+      - logger.log:
+          format: "g_mqtt_url: [%s]"
+          args: ['id(g_mqtt_url).c_str()']
+      - logger.log:
+          format: "g_mqtt_username: [%s]"
+          args: ['id(g_mqtt_username).c_str()']
+      - logger.log:
+          format: "g_mqtt_password: [%s]"
+          args: ['id(g_mqtt_password).c_str()']
+      - logger.log:
+          format: "g_mqtt_port: [%s]"
+          args: ['id(g_mqtt_port).c_str()']
+      - logger.log:
+          format: "g_user_id: [%s]"
+          args: ['id(g_user_id).c_str()']
+      - logger.log:
+          format: "g_home_id: [%s]"
+          args: ['id(g_home_id).c_str()']
+      - logger.log:
+          format: "g_device_id: [%s]"
+          args: ['id(g_device_id).c_str()']
+      - logger.log:
+          format: "===== END BOOT DEBUG ====="
+          level: INFO
+      - if:
+          condition:
+            lambda: 'return id(g_wifi_ssid).length() > 0;'
+          then:
+            - logger.log: "Credentials found. Configuring WiFi, deferring MQTT until connected."
+            - mqtt.disable:
+            - lambda: |-
+                auto sta = wifi::WiFiAP();
+                sta.set_ssid(id(g_wifi_ssid).c_str());
+                sta.set_password(id(g_wifi_password).c_str());
+                wifi::global_wifi_component->set_sta(sta);
+                ESP_LOGI("prov", "WiFi set to SSID: %s", id(g_wifi_ssid).c_str());
+                id(my_mqtt).set_broker_address(id(g_mqtt_url).c_str());
+                if (id(g_mqtt_port).length() > 0) {
+                  id(my_mqtt).set_broker_port(atoi(id(g_mqtt_port).c_str()));
+                }
+                if (id(g_mqtt_username).length() > 0) {
+                  id(my_mqtt).set_username(id(g_mqtt_username).c_str());
+                  id(my_mqtt).set_password(id(g_mqtt_password).c_str());
+                }
+                std::string topic = id(g_user_id) + "/" + id(g_home_id) + "/" + id(g_device_id);
+                id(my_mqtt).set_topic_prefix(topic, topic);
+                ESP_LOGI("prov", "MQTT configured: %s:%s, topic: %s", id(g_mqtt_url).c_str(), id(g_mqtt_port).c_str(), topic.c_str());
+            - delay: 3s
+            - ble.disable:
+          else:
+            - logger.log: "No credentials found. Disabling WiFi/MQTT, entering Enrollment Mode."
+            - wifi.disable:
+            - mqtt.disable:
+            - script.execute: blink_enrollment_led
+            - lambda: |-
+                std::string val = "ml-smart-sensor-v1";
+                id(char_product_type).set_value(std::vector<uint8_t>(val.begin(), val.end()));
+
+esp32:
+  board: esp32-c6-devkitc-1
+  framework:
+    type: esp-idf
+
+logger:
+api:
+  encryption:
+    key: "RwQrg17nYdokW2uJPUI+Wohl6l+nLcqcwHcERiysb4Y="
+
+ota:
+  - platform: esphome
+    password: "aed0a004cac4aee6f8b5d5c294308a4c"
+
+# --- 1. GLOBAL MEMORY (NVS) ---
+globals:
+  - id: g_user_id
+    type: std::string
+    restore_value: yes
+    max_restore_data_length: 64
+    initial_value: '"provisioning"'
+  - id: g_home_id
+    type: std::string
+    restore_value: yes
+    max_restore_data_length: 64
+    initial_value: '"unassigned"'
+  - id: g_device_id
+    type: std::string
+    restore_value: yes
+    max_restore_data_length: 64
+    initial_value: '"unassigned"'
+  - id: g_mqtt_url
+    type: std::string
+    restore_value: yes
+    max_restore_data_length: 128
+    initial_value: '"dummy.local"'
+  - id: g_mqtt_username
+    type: std::string
+    restore_value: yes
+    max_restore_data_length: 64
+    initial_value: '""'
+  - id: g_mqtt_password
+    type: std::string
+    restore_value: yes
+    max_restore_data_length: 64
+    initial_value: '""'
+  - id: g_mqtt_port
+    type: std::string
+    restore_value: yes
+    max_restore_data_length: 8
+    initial_value: '"1883"'
+  - id: g_wifi_ssid
+    type: std::string
+    restore_value: yes
+    max_restore_data_length: 64
+    initial_value: '""'
+  - id: g_wifi_password
+    type: std::string
+    restore_value: yes
+    max_restore_data_length: 64
+    initial_value: '""'
+
+# --- 2. MQTT CONFIGURATION ---
+mqtt:
+  id: my_mqtt
+  broker: ""
+
+# --- 3. BLUETOOTH SERVER ---
+esp32_ble_server:
+  on_connect:
+    - logger.log: "Dashboard connected!"
+    - script.stop: blink_enrollment_led
+    - switch.turn_on: user_led
+  on_disconnect:
+    - switch.turn_off: user_led
+    - if:
+        condition:
+          lambda: 'return id(g_wifi_ssid).length() == 0;'
+        then:
+          - script.execute: blink_enrollment_led
+
+  services:
+    - uuid: "12345678-1234-1234-1234-000000000000"
+      characteristics:
+        - uuid: "12345678-1234-1234-1234-000000000001"
+          id: char_product_type
+          read: true
+
+        - uuid: "12345678-1234-1234-1234-000000000002"
+          write: true
+          on_write:
+            - logger.log:
+                format: "BLE WRITE g_user_id: [%s]"
+                args: ['std::string(x.begin(), x.end()).c_str()']
+            - globals.set:
+                id: g_user_id
+                value: !lambda 'return std::string(x.begin(), x.end());'
+
+        - uuid: "12345678-1234-1234-1234-000000000003"
+          write: true
+          on_write:
+            - logger.log:
+                format: "BLE WRITE g_device_id: [%s]"
+                args: ['std::string(x.begin(), x.end()).c_str()']
+            - globals.set:
+                id: g_device_id
+                value: !lambda 'return std::string(x.begin(), x.end());'
+
+        - uuid: "12345678-1234-1234-1234-000000000004"
+          write: true
+          on_write:
+            - logger.log:
+                format: "BLE WRITE g_mqtt_url: [%s]"
+                args: ['std::string(x.begin(), x.end()).c_str()']
+            - globals.set:
+                id: g_mqtt_url
+                value: !lambda 'return std::string(x.begin(), x.end());'
+
+        - uuid: "12345678-1234-1234-1234-000000000005"
+          write: true
+          on_write:
+            - logger.log:
+                format: "BLE WRITE g_wifi_ssid: [%s]"
+                args: ['std::string(x.begin(), x.end()).c_str()']
+            - globals.set:
+                id: g_wifi_ssid
+                value: !lambda 'return std::string(x.begin(), x.end());'
+
+        - uuid: "12345678-1234-1234-1234-000000000006"
+          write: true
+          on_write:
+            - logger.log:
+                format: "BLE WRITE g_wifi_password: [%s]"
+                args: ['std::string(x.begin(), x.end()).c_str()']
+            - globals.set:
+                id: g_wifi_password
+                value: !lambda 'return std::string(x.begin(), x.end());'
+
+        - uuid: "12345678-1234-1234-1234-000000000007"
+          write: true
+          on_write:
+            - logger.log:
+                format: "BLE WRITE g_mqtt_username: [%s]"
+                args: ['std::string(x.begin(), x.end()).c_str()']
+            - globals.set:
+                id: g_mqtt_username
+                value: !lambda 'return std::string(x.begin(), x.end());'
+
+        - uuid: "12345678-1234-1234-1234-000000000008"
+          write: true
+          on_write:
+            - logger.log:
+                format: "BLE WRITE g_mqtt_password: [%s]"
+                args: ['std::string(x.begin(), x.end()).c_str()']
+            - globals.set:
+                id: g_mqtt_password
+                value: !lambda 'return std::string(x.begin(), x.end());'
+
+        - uuid: "12345678-1234-1234-1234-000000000009"
+          write: true
+          on_write:
+            - logger.log:
+                format: "BLE WRITE g_mqtt_port: [%s]"
+                args: ['std::string(x.begin(), x.end()).c_str()']
+            - globals.set:
+                id: g_mqtt_port
+                value: !lambda 'return std::string(x.begin(), x.end());'
+
+        - uuid: "12345678-1234-1234-1234-00000000000A"
+          write: true
+          on_write:
+            - logger.log:
+                format: "BLE WRITE g_home_id: [%s]"
+                args: ['std::string(x.begin(), x.end()).c_str()']
+            - globals.set:
+                id: g_home_id
+                value: !lambda 'return std::string(x.begin(), x.end());'
+
+        # Force NVS save and Restart
+        - uuid: "12345678-1234-1234-1234-00000000000B"
+          write: true
+          on_write:
+            - logger.log: "Forcing NVS sync and Rebooting..."
+            - lambda: 'global_preferences->sync();'
+            - delay: 2s
+            - button.press: restart_device
+
+# --- 4. SYSTEM COMPONENTS ---
+button:
+  - platform: restart
+    id: restart_device
+    name: "Restart"
+  - platform: template
+    id: factory_reset
+    name: "Factory Reset"
+    on_press:
+      - script.execute: do_factory_reset
+
+binary_sensor:
+  - platform: gpio
+    pin: { number: 9, inverted: true }
+    id: factory_reset_button
+    filters: [delayed_on: 5s]
+    on_press:
+      then:
+        - script.execute: do_factory_reset
+
+switch:
+  - platform: gpio
+    pin: { number: 15, inverted: true }
+    id: user_led
+    internal: true
+  - platform: template
+    id: dummy_switch
+    name: "Power"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+
+script:
+  - id: do_factory_reset
+    then:
+      - logger.log: "Factory reset triggered! Clearing all provisioning data..."
+      - globals.set: { id: g_user_id, value: '"provisioning"' }
+      - globals.set: { id: g_home_id, value: '"unassigned"' }
+      - globals.set: { id: g_device_id, value: '"unassigned"' }
+      - globals.set: { id: g_mqtt_url, value: '"dummy.local"' }
+      - globals.set: { id: g_mqtt_username, value: '""' }
+      - globals.set: { id: g_mqtt_password, value: '""' }
+      - globals.set: { id: g_mqtt_port, value: '"1883"' }
+      - globals.set: { id: g_wifi_ssid, value: '""' }
+      - globals.set: { id: g_wifi_password, value: '""' }
+      - lambda: 'global_preferences->sync();'
+      - delay: 1s
+      - button.press: restart_device
+  - id: blink_enrollment_led
+    mode: restart
+    then:
+      - while:
+          condition: { lambda: 'return true;' }
+          then:
+            - switch.toggle: user_led
+            - delay: 500ms
+
+preferences:
+  flash_write_interval: 60s
+
+wifi:
+  ssid: "dummy"
+  password: ""
+  on_connect:
+    - logger.log: "WiFi connected. Enabling MQTT."
+    - delay: 2s
+    - mqtt.enable:
