@@ -24,10 +24,10 @@ type Home struct {
 	DeletedAt    gorm.DeletedAt `gorm:"index" json:"-"`
 	UserID       uint           `json:"user_id"`
 	Name         string         `json:"name"`
-	WiFiSSID     string         `json:"wifi_ssid"`
-	WiFiPassword string         `json:"-"`
-	MQTTUsername string         `json:"mqtt_username"`
-	MQTTPassword string         `json:"-"`
+	WiFiSSID     string         `gorm:"column:wifi_ssid" json:"wifi_ssid"`
+	WiFiPassword string         `gorm:"column:wifi_password" json:"-"`
+	MQTTUsername string         `gorm:"column:mqtt_username" json:"mqtt_username"`
+	MQTTPassword string         `gorm:"column:mqtt_password" json:"-"`
 	Devices      []Device       `json:"devices,omitempty"`
 }
 
