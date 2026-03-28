@@ -9,6 +9,7 @@ import (
 	"github.com/iot-backend/internal/db"
 	"github.com/iot-backend/internal/models"
 	"github.com/iot-backend/internal/mqtt"
+	"github.com/iot-backend/internal/oauth"
 	"github.com/iot-backend/internal/state"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -21,8 +22,11 @@ func SetupEnrollmentRoutes(r *gin.Engine, appCfg *config.Config) {
 	api := r.Group("/api/enroll")
 	{
 		api.POST("/user", enrollUser)
-		api.POST("/home", enrollHome)
-		api.POST("/device", enrollDevice)
+
+		protected := api.Group("")
+		protected.Use(oauth.RequireSession())
+		protected.POST("/home", enrollHome)
+		protected.POST("/device", enrollDevice)
 	}
 }
 
@@ -58,8 +62,13 @@ func enrollUser(c *gin.Context) {
 }
 
 func enrollHome(c *gin.Context) {
+	sessionUser, ok := oauth.CurrentSessionUser(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
 	var req struct {
-		UserID       uint   `json:"user_id" binding:"required"`
 		Name         string `json:"name" binding:"required"`
 		WiFiSSID     string `json:"wifi_ssid"`
 		WiFiPassword string `json:"wifi_password"`
@@ -72,13 +81,13 @@ func enrollHome(c *gin.Context) {
 	}
 
 	var user models.User
-	if err := db.DB.First(&user, req.UserID).Error; err != nil {
+	if err := db.DB.First(&user, sessionUser.UserID).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
 		return
 	}
 
 	home := models.Home{
-		UserID:       req.UserID,
+		UserID:       sessionUser.UserID,
 		Name:         req.Name,
 		WiFiSSID:     req.WiFiSSID,
 		WiFiPassword: req.WiFiPassword,
@@ -97,11 +106,16 @@ func enrollHome(c *gin.Context) {
 }
 
 func enrollDevice(c *gin.Context) {
+	sessionUser, ok := oauth.CurrentSessionUser(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
 	var req struct {
-		UserID      uint   `json:"user_id" binding:"required"`
-		HomeID      uint   `json:"home_id" binding:"required"`
-		Name        string `json:"name" binding:"required"`
-		ProductName string `json:"product_name" binding:"required"`
+		HomeID    uint   `json:"home_id" binding:"required"`
+		Name      string `json:"name" binding:"required"`
+		ProductID uint   `json:"product_id" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -113,19 +127,19 @@ func enrollDevice(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "home not found"})
 		return
 	}
-	if home.UserID != req.UserID {
+	if home.UserID != sessionUser.UserID {
 		c.JSON(http.StatusForbidden, gin.H{"error": "home does not belong to user"})
 		return
 	}
 
 	var product models.Product
-	if err := db.DB.Where("name = ?", req.ProductName).First(&product).Error; err != nil {
+	if err := db.DB.First(&product, req.ProductID).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "product not found"})
 		return
 	}
 
 	device := models.Device{
-		UserID:    req.UserID,
+		UserID:    sessionUser.UserID,
 		HomeID:    req.HomeID,
 		ProductID: product.ID,
 		Name:      req.Name,
@@ -142,12 +156,13 @@ func enrollDevice(c *gin.Context) {
 
 	mqtt.SubscribeDevice(device)
 
+	mqttHost, mqttPort := cfg.MQTTHostAndPort()
 	c.JSON(http.StatusCreated, gin.H{
 		"device_id":     fmt.Sprintf("%d", device.ID),
-		"user_id":       fmt.Sprintf("%d", req.UserID),
+		"user_id":       fmt.Sprintf("%d", sessionUser.UserID),
 		"home_id":       fmt.Sprintf("%d", req.HomeID),
-		"mqtt_url":      cfg.MQTT.Broker,
-		"mqtt_port":     "1883",
+		"mqtt_host":     mqttHost,
+		"mqtt_port":     mqttPort,
 		"mqtt_username": home.MQTTUsername,
 		"mqtt_password": home.MQTTPassword,
 		"wifi_ssid":     home.WiFiSSID,

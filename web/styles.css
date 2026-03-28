@@ -1,0 +1,24 @@
+html {
+  color-scheme: light;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at top, rgba(37, 99, 235, 0.08), transparent 32%),
+    linear-gradient(180deg, #f8fafc 0%, #eef2ff 100%);
+  color: #0f172a;
+  font-family: Inter, "Segoe UI", sans-serif;
+}
+
+noscript {
+  display: block;
+  margin: 24px auto;
+  max-width: 960px;
+  padding: 16px 20px;
+  border: 1px solid #cbd5e1;
+  border-radius: 12px;
+  background: #ffffff;
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.08);
+}

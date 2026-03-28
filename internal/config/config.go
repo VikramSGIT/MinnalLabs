@@ -2,7 +2,10 @@ package config
 
 import (
 	"log"
+	"net"
+	"net/http"
 	"strings"
+	"time"
 
 	"github.com/joho/godotenv"
 	"github.com/spf13/viper"
@@ -22,9 +25,20 @@ type Config struct {
 	}
 	MQTT struct {
 		Broker   string
+		Host     string
+		Port     string
 		ClientID string
 		Username string
 		Password string
+	}
+	Frontend struct {
+		AllowedOrigins string
+	}
+	Session struct {
+		CookieName string
+		Domain     string
+		Secure     bool
+		SameSite   string
 	}
 	Valkey struct {
 		Addr     string
@@ -53,9 +67,16 @@ func LoadConfig() *Config {
 	viper.SetDefault("database.password", "")
 	viper.SetDefault("database.name", "")
 	viper.SetDefault("mqtt.broker", "tcp://localhost:1883")
+	viper.SetDefault("mqtt.host", "")
+	viper.SetDefault("mqtt.port", "")
 	viper.SetDefault("mqtt.clientid", "iot-backend")
 	viper.SetDefault("mqtt.username", "")
 	viper.SetDefault("mqtt.password", "")
+	viper.SetDefault("frontend.allowed_origins", "http://localhost,http://localhost:8080,http://127.0.0.1,http://127.0.0.1:8080,https://localhost,https://127.0.0.1")
+	viper.SetDefault("session.cookie_name", "user_session")
+	viper.SetDefault("session.domain", "")
+	viper.SetDefault("session.secure", true)
+	viper.SetDefault("session.same_site", "Lax")
 	viper.SetDefault("valkey.addr", "localhost:6379")
 	viper.SetDefault("valkey.password", "")
 
@@ -71,4 +92,78 @@ func LoadConfig() *Config {
 	}
 
 	return &config
+}
+
+func (c *Config) FrontendAllowedOrigins() []string {
+	raw := strings.TrimSpace(c.Frontend.AllowedOrigins)
+	if raw == "" {
+		return []string{"http://localhost"}
+	}
+
+	parts := strings.Split(raw, ",")
+	origins := make([]string, 0, len(parts))
+	for _, part := range parts {
+		origin := strings.TrimSpace(part)
+		if origin != "" {
+			origins = append(origins, origin)
+		}
+	}
+
+	if len(origins) == 0 {
+		return []string{"http://localhost"}
+	}
+
+	return origins
+}
+
+func (c *Config) MQTTHostAndPort() (string, string) {
+	host := strings.TrimSpace(c.MQTT.Host)
+	port := strings.TrimSpace(c.MQTT.Port)
+
+	if host == "" || port == "" {
+		broker := strings.TrimSpace(c.MQTT.Broker)
+		if idx := strings.Index(broker, "://"); idx >= 0 {
+			broker = broker[idx+3:]
+		}
+		if slash := strings.Index(broker, "/"); slash >= 0 {
+			broker = broker[:slash]
+		}
+
+		if parsedHost, parsedPort, err := net.SplitHostPort(broker); err == nil {
+			if host == "" {
+				host = parsedHost
+			}
+			if port == "" {
+				port = parsedPort
+			}
+		} else if host == "" && broker != "" {
+			host = broker
+		}
+	}
+
+	if host == "" {
+		host = "localhost"
+	}
+	if port == "" {
+		port = "1883"
+	}
+
+	return host, port
+}
+
+func (c *Config) SessionTTL() time.Duration {
+	return 7 * 24 * time.Hour
+}
+
+func (c *Config) SessionSameSite() http.SameSite {
+	switch strings.ToLower(strings.TrimSpace(c.Session.SameSite)) {
+	case "strict":
+		return http.SameSiteStrictMode
+	case "none":
+		return http.SameSiteNoneMode
+	case "default":
+		return http.SameSiteDefaultMode
+	default:
+		return http.SameSiteLaxMode
+	}
 }

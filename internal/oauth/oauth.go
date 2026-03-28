@@ -5,14 +5,14 @@ import (
 	"log"
 	"net/http"
 	"net/url"
-	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/go-oauth2/oauth2/v4/errors"
+	oautherrors "github.com/go-oauth2/oauth2/v4/errors"
 	"github.com/go-oauth2/oauth2/v4/manage"
 	"github.com/go-oauth2/oauth2/v4/models"
 	"github.com/go-oauth2/oauth2/v4/server"
 	"github.com/go-oauth2/oauth2/v4/store"
+	"github.com/iot-backend/internal/config"
 	"github.com/iot-backend/internal/db"
 	localmodels "github.com/iot-backend/internal/models"
 	"golang.org/x/crypto/bcrypt"
@@ -30,11 +30,11 @@ func InitOAuth() {
 
 	// Client store
 	clientStore := store.NewClientStore()
-	
+
 	// Load clients from our DB into the in-memory client store
 	var dbClients []localmodels.OAuthClient
 	db.DB.Find(&dbClients)
-	
+
 	for _, c := range dbClients {
 		clientStore.Set(c.ID, &models.Client{
 			ID:     c.ID,
@@ -53,7 +53,7 @@ func InitOAuth() {
 			UserID: "1",
 		}
 		db.DB.Create(&defaultClient)
-		
+
 		clientStore.Set(defaultClient.ID, &models.Client{
 			ID:     defaultClient.ID,
 			Secret: defaultClient.Secret,
@@ -66,44 +66,58 @@ func InitOAuth() {
 	manager.MapClientStorage(clientStore)
 
 	Srv = server.NewServer(server.NewConfig(), manager)
-	
+
 	Srv.SetUserAuthorizationHandler(userAuthorizeHandler)
-	
-	Srv.SetInternalErrorHandler(func(err error) (re *errors.Response) {
+
+	Srv.SetInternalErrorHandler(func(err error) (re *oautherrors.Response) {
 		log.Println("Internal Error:", err.Error())
 		return
 	})
-	
-	Srv.SetResponseErrorHandler(func(re *errors.Response) {
+
+	Srv.SetResponseErrorHandler(func(re *oautherrors.Response) {
 		log.Println("Response Error:", re.Error.Error())
 	})
 }
 
 // userAuthorizeHandler handles the user authorization logic
 func userAuthorizeHandler(w http.ResponseWriter, r *http.Request) (userID string, err error) {
-	// Simple session check (using cookies)
-	cookie, err := r.Cookie("user_session")
-	if err != nil {
+	sessionUser, ok := restoreSessionFromRequest(r)
+	if !ok {
 		// User not logged in, redirect to login page
-		
+		http.SetCookie(w, expiredSessionCookie())
+
 		// Encode the original request URL
 		originalURL := r.URL.String()
 		loginURL := "/login?redirect=" + url.QueryEscape(originalURL)
-		
+
 		http.Redirect(w, r, loginURL, http.StatusFound)
 		return "", nil
 	}
-	
-	// User is logged in
-	return cookie.Value, nil
+
+	http.SetCookie(w, sessionCookie(sessionUser.Token))
+	return fmt.Sprintf("%d", sessionUser.UserID), nil
+}
+
+func authenticateUser(username, password string) (*localmodels.User, error) {
+	var user localmodels.User
+	if err := db.DB.Where("username = ?", username).First(&user).Error; err != nil {
+		return nil, fmt.Errorf("invalid credentials")
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(password)); err != nil {
+		return nil, fmt.Errorf("invalid credentials")
+	}
+
+	return &user, nil
 }
 
 // SetupOAuthRoutes adds OAuth endpoints to the Gin router
-func SetupOAuthRoutes(r *gin.Engine) {
+func SetupOAuthRoutes(r *gin.Engine, cfg *config.Config) {
+	initSessionConfig(cfg)
+
 	// Show Login Page
 	r.GET("/login", func(c *gin.Context) {
 		redirect := c.Query("redirect")
-		
+
 		html := `
 		<html>
 			<head><title>Login to IoT Backend</title></head>
@@ -126,24 +140,67 @@ func SetupOAuthRoutes(r *gin.Engine) {
 		password := c.PostForm("password")
 		redirect := c.PostForm("redirect")
 
-		var user localmodels.User
-		if err := db.DB.Where("username = ?", username).First(&user).Error; err == nil {
-			if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(password)); err == nil {
-				cookie := &http.Cookie{
-					Name:     "user_session",
-					Value:    fmt.Sprintf("%d", user.ID),
-					Path:     "/",
-					Expires:  time.Now().Add(24 * time.Hour),
-					HttpOnly: true,
-				}
-				http.SetCookie(c.Writer, cookie)
-				c.Redirect(http.StatusFound, redirect)
+		user, err := authenticateUser(username, password)
+		if err == nil {
+			if err := issueSession(c, user); err != nil {
+				c.String(http.StatusInternalServerError, "Failed to create session")
 				return
 			}
+			c.Redirect(http.StatusFound, redirect)
+			return
 		}
 
 		c.String(http.StatusUnauthorized, "Invalid credentials")
 	})
+
+	api := r.Group("/api/session")
+	{
+		api.POST("/login", func(c *gin.Context) {
+			var req struct {
+				Username string `json:"username" binding:"required"`
+				Password string `json:"password" binding:"required"`
+			}
+			if err := c.ShouldBindJSON(&req); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+				return
+			}
+
+			user, err := authenticateUser(req.Username, req.Password)
+			if err != nil {
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
+				return
+			}
+
+			if err := issueSession(c, user); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create session"})
+				return
+			}
+
+			c.JSON(http.StatusOK, gin.H{
+				"user_id":  user.ID,
+				"username": user.Username,
+			})
+		})
+
+		protected := api.Group("")
+		protected.Use(RequireSession())
+		protected.GET("/me", func(c *gin.Context) {
+			sessionUser, ok := CurrentSessionUser(c)
+			if !ok {
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+				return
+			}
+
+			c.JSON(http.StatusOK, gin.H{
+				"user_id":  sessionUser.UserID,
+				"username": sessionUser.Username,
+			})
+		})
+		protected.POST("/logout", func(c *gin.Context) {
+			destroySession(c)
+			c.JSON(http.StatusOK, gin.H{"ok": true})
+		})
+	}
 
 	// OAuth2 Endpoints
 	r.Any("/oauth/authorize", func(c *gin.Context) {

@@ -20,11 +20,27 @@ services:
       - DATABASE_PASSWORD=${DB_PASSWORD}
       - DATABASE_NAME=${DB_NAME}
       - MQTT_BROKER=${MQTT_BROKER}
+      - MQTT_HOST=${MQTT_HOST:-10.0.0.2}
+      - MQTT_PORT=${MQTT_PORT:-1883}
       - MQTT_USERNAME=${MQTT_USERNAME}
       - MQTT_PASSWORD=${MQTT_PASSWORD}
+      - FRONTEND_ALLOWED_ORIGINS=${FRONTEND_ALLOWED_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
+      - SESSION_SECURE=${SESSION_SECURE:-false}
       - VALKEY_ADDR=valkey:6379
     depends_on:
       - valkey
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./web
+    container_name: iot-frontend
+    ports:
+      - 3000:80
+    environment:
+      - API_BASE_URL=${FRONTEND_API_BASE_URL:-http://localhost:8080}
+    depends_on:
+      - backend
     restart: unless-stopped
 
 volumes:

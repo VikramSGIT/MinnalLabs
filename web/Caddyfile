@@ -1,0 +1,10 @@
+:80 {
+  root * /srv
+
+  @runtimeConfig path /config.js
+  header @runtimeConfig Cache-Control "no-store"
+
+  try_files {path} /index.html
+  encode zstd gzip
+  file_server
+}
