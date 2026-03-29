@@ -78,12 +78,16 @@ func sanitizeVersion(version string) string {
 	return versionSanitizer.ReplaceAllString(strings.TrimSpace(version), "_")
 }
 
-func buildFirmwareFilename(productID uint, version string) string {
-	return fmt.Sprintf("%d_%s.bin", productID, version)
+func buildFirmwareBaseName(productID uint, version string) string {
+	return fmt.Sprintf("%d_%s", productID, version)
 }
 
-func buildFirmwareMD5Filename(filename string) string {
-	return filename + ".md5"
+func buildFirmwareFilename(productID uint, version string) string {
+	return buildFirmwareBaseName(productID, version) + ".bin"
+}
+
+func buildFirmwareMD5Filename(productID uint, version string) string {
+	return buildFirmwareBaseName(productID, version) + ".bin.md5"
 }
 
 func effectiveRolloutPercentage(product models.Product) int {
@@ -179,7 +183,7 @@ func uploadFirmware(c *gin.Context) {
 		return
 	}
 
-	md5Filename := buildFirmwareMD5Filename(filename)
+	md5Filename := buildFirmwareMD5Filename(product.ID, version)
 	md5Path := filepath.Join(cfg.FirmwareStoragePath(), md5Filename)
 	if err := os.WriteFile(md5Path, []byte(md5sum), 0o644); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to write firmware md5 file"})
