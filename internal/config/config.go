@@ -4,7 +4,6 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
@@ -46,7 +45,6 @@ type Config struct {
 		Password string
 	}
 	Firmware struct {
-		BaseURL    string
 		StorageDir string
 	}
 }
@@ -84,7 +82,6 @@ func LoadConfig() *Config {
 	viper.SetDefault("session.same_site", "Lax")
 	viper.SetDefault("valkey.addr", "localhost:6379")
 	viper.SetDefault("valkey.password", "")
-	viper.SetDefault("firmware.base_url", "http://localhost:8081/firmware")
 	viper.SetDefault("firmware.storage_dir", "./firmware")
 
 	if err := viper.ReadInConfig(); err != nil {
@@ -181,16 +178,4 @@ func (c *Config) FirmwareStoragePath() string {
 		return "./firmware"
 	}
 	return path
-}
-
-func (c *Config) FirmwareFileURL(filename string) string {
-	base := strings.TrimRight(strings.TrimSpace(c.Firmware.BaseURL), "/")
-	if base == "" {
-		base = "http://localhost:8081/firmware"
-	}
-	return base + "/" + url.PathEscape(filename)
-}
-
-func (c *Config) FirmwareMD5URL(filename string) string {
-	return c.FirmwareFileURL(filename + ".md5")
 }

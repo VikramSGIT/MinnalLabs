@@ -133,13 +133,7 @@ func firmwareState(device models.Device, presence state.DevicePresence, presence
 }
 
 func firmwareMD5URL(product models.Product) string {
-	if strings.TrimSpace(product.FirmwareMD5URL) != "" {
-		return strings.TrimSpace(product.FirmwareMD5URL)
-	}
-	if strings.TrimSpace(product.FirmwareURL) == "" {
-		return ""
-	}
-	return strings.TrimSpace(product.FirmwareURL) + ".md5"
+	return strings.TrimSpace(product.FirmwareMD5URL)
 }
 
 func firmwareURL(product models.Product) string {

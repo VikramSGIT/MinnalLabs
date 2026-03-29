@@ -105,13 +105,7 @@ func effectiveFirmwareURL(product models.Product) string {
 }
 
 func effectiveFirmwareMD5URL(product models.Product) string {
-	if strings.TrimSpace(product.FirmwareMD5URL) != "" {
-		return strings.TrimSpace(product.FirmwareMD5URL)
-	}
-	if strings.TrimSpace(product.FirmwareURL) == "" {
-		return ""
-	}
-	return strings.TrimSpace(product.FirmwareURL) + ".md5"
+	return strings.TrimSpace(product.FirmwareMD5URL)
 }
 
 func normalizeBatchIntervalMinutes(value int, unit string) (int, error) {
@@ -192,14 +186,9 @@ func uploadFirmware(c *gin.Context) {
 		return
 	}
 
-	firmwareURL := cfg.FirmwareFileURL(filename)
-	md5URL := cfg.FirmwareMD5URL(filename)
-
 	now := time.Now().UTC()
 	if err := db.DB.Model(&product).Updates(map[string]interface{}{
 		"firmware_version":     version,
-		"firmware_url":         firmwareURL,
-		"firmware_md5_url":     md5URL,
 		"firmware_uploaded_at": now,
 	}).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to persist firmware metadata"})
@@ -210,8 +199,8 @@ func uploadFirmware(c *gin.Context) {
 		"product_id":           product.ID,
 		"name":                 product.Name,
 		"firmware_version":     version,
-		"firmware_url":         firmwareURL,
-		"firmware_md5_url":     md5URL,
+		"firmware_url":         effectiveFirmwareURL(product),
+		"firmware_md5_url":     effectiveFirmwareMD5URL(product),
 		"firmware_uploaded_at": now,
 	})
 }

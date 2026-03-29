@@ -19,8 +19,6 @@ import (
 
 const workerInterval = 30 * time.Second
 
-var appCfg *config.Config
-
 const (
 	rolloutStatusPending   = "pending"
 	rolloutStatusRunning   = "running"
@@ -90,13 +88,7 @@ func currentDeviceFirmwareVersion(device models.Device) string {
 }
 
 func currentProductMD5URL(product models.Product) string {
-	if strings.TrimSpace(product.FirmwareMD5URL) != "" {
-		return strings.TrimSpace(product.FirmwareMD5URL)
-	}
-	if strings.TrimSpace(product.FirmwareURL) == "" {
-		return ""
-	}
-	return strings.TrimSpace(product.FirmwareURL) + ".md5"
+	return strings.TrimSpace(product.FirmwareMD5URL)
 }
 
 func currentProductFirmwareURL(product models.Product) string {
@@ -104,7 +96,7 @@ func currentProductFirmwareURL(product models.Product) string {
 }
 
 func StartWorker(cfg *config.Config) {
-	appCfg = cfg
+	_ = cfg
 	mqtt.RegisterStatusUpdateHook(HandleDeviceStatusUpdate)
 	go func() {
 		processDueRollouts()
@@ -423,9 +415,6 @@ func dispatchNextBatch(rollout models.FirmwareRollout) error {
 		ORDER BY frd.device_id ASC
 	`, rollout.ID, nextPending.BatchNumber, rolloutDevicePending).Scan(&targets).Error; err != nil {
 		return err
-	}
-	if appCfg == nil {
-		return fmt.Errorf("ota worker config not initialized")
 	}
 
 	var product models.Product

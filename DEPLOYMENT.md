@@ -130,12 +130,10 @@ location with a `.md5` suffix, for example:
 http://localhost:8081/firmware/1_v1.0.2.bin.md5
 ```
 
-Set this in the backend environment if you are exposing Caddy on a different
-host or domain:
-
-```env
-FIRMWARE_BASE_URL=http://localhost:8081/firmware
-```
+The backend reads `firmware_url` and `firmware_md5_url` directly from the
+`products` table when publishing OTA commands. Those URLs can be provisioned by
+another backend or deployment workflow; this service no longer derives them
+from a local base URL setting.
 
 ## Admin Users
 
