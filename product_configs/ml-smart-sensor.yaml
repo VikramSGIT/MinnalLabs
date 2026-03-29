@@ -1,3 +1,6 @@
+substitutions:
+  firmware_version: v1.0.1
+
 esphome:
   name: ml-smart-sensor-v1
   friendly_name: presence sensor
@@ -33,10 +36,11 @@ esphome:
                 id(my_mqtt).set_topic_prefix(topic, topic);
                 std::string status_topic = topic + "/status";
 
-                // Retained LWT messages let the backend rebuild presence after reconnecting.
+                std::string firmware_version = "${firmware_version}";
+
                 mqtt::MQTTMessage birth_message;
                 birth_message.topic = status_topic;
-                birth_message.payload = "online";
+                birth_message.payload = std::string("online_") + firmware_version;
                 birth_message.qos = 0;
                 birth_message.retain = true;
                 id(my_mqtt).set_birth_message(std::move(birth_message));
@@ -116,10 +120,66 @@ globals:
     restore_value: yes
     max_restore_data_length: 64
     initial_value: '""'
+  - id: g_ota_url
+    type: std::string
+    restore_value: no
+    initial_value: '""'
+  - id: g_ota_md5
+    type: std::string
+    restore_value: no
+    initial_value: '""'
+  - id: g_ota_version
+    type: std::string
+    restore_value: no
+    initial_value: '""'
+  - id: g_ota_pending
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: g_ota_topic_subscribed
+    type: bool
+    restore_value: no
+    initial_value: 'false'
 
 mqtt:
   id: my_mqtt
   broker: ""
+  on_connect:
+    - lambda: |-
+        if (id(g_ota_topic_subscribed)) {
+          return;
+        }
+        std::string ota_topic = id(g_user_id) + "/" + id(g_home_id) + "/" + id(g_device_id) + "/ota/command";
+        id(my_mqtt).subscribe_json(ota_topic, [=](const std::string &topic, JsonObject root) {
+          if (!root.containsKey("version") || !root.containsKey("url") || !root.containsKey("md5")) {
+            ESP_LOGW("ota", "Ignoring OTA command missing version/url/md5");
+            return;
+          }
+
+          std::string target_version = std::string(root["version"].as<const char *>());
+          if (target_version == "${firmware_version}") {
+            ESP_LOGI("ota", "Already on firmware %s, ignoring OTA command", target_version.c_str());
+            return;
+          }
+
+          id(g_ota_version) = target_version;
+          id(g_ota_url) = std::string(root["url"].as<const char *>());
+          id(g_ota_md5) = std::string(root["md5"].as<const char *>());
+          id(g_ota_pending) = true;
+
+          ESP_LOGI("ota", "Queued OTA version %s from %s", id(g_ota_version).c_str(), id(g_ota_url).c_str());
+          id(run_pending_ota).execute();
+        });
+        id(g_ota_topic_subscribed) = true;
+        ESP_LOGI("ota", "Subscribed to OTA topic %s", ota_topic.c_str());
+  on_disconnect:
+    - lambda: |-
+        id(g_ota_topic_subscribed) = false;
+
+http_request:
+
+ota:
+  - platform: http_request
 
 esp32_ble_server:
   on_connect:
@@ -274,6 +334,19 @@ switch:
     restore_mode: RESTORE_DEFAULT_OFF
 
 script:
+  - id: run_pending_ota
+    mode: single
+    then:
+      - if:
+          condition:
+            lambda: 'return id(g_ota_pending) && id(g_ota_url).length() > 0 && id(g_ota_md5).length() > 0;'
+          then:
+            - logger.log:
+                format: "Applying OTA version %s from %s"
+                args: ['id(g_ota_version).c_str()', 'id(g_ota_url).c_str()']
+            - ota.http_request.flash:
+                url: !lambda 'return id(g_ota_url);'
+                md5: !lambda 'return id(g_ota_md5);'
   - id: do_factory_reset
     then:
       - logger.log: "Factory reset triggered! Clearing all provisioning data..."
@@ -286,6 +359,11 @@ script:
       - globals.set: { id: g_mqtt_port, value: '"1883"' }
       - globals.set: { id: g_wifi_ssid, value: '""' }
       - globals.set: { id: g_wifi_password, value: '""' }
+      - globals.set: { id: g_ota_url, value: '""' }
+      - globals.set: { id: g_ota_md5, value: '""' }
+      - globals.set: { id: g_ota_version, value: '""' }
+      - globals.set: { id: g_ota_pending, value: 'false' }
+      - globals.set: { id: g_ota_topic_subscribed, value: 'false' }
       - lambda: 'global_preferences->sync();'
       - delay: 1s
       - button.press: restart_device

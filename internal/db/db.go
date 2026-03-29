@@ -4,6 +4,9 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
+	"sort"
+	"strings"
 
 	"github.com/iot-backend/internal/config"
 	"gorm.io/driver/postgres"
@@ -31,13 +34,29 @@ func InitDB(cfg *config.Config) {
 }
 
 func RunMigrations() {
-	sqlBytes, err := os.ReadFile("migrations/001_init.sql")
+	entries, err := os.ReadDir("migrations")
 	if err != nil {
-		log.Fatalf("Failed to read migration file: %v", err)
+		log.Fatalf("Failed to read migrations directory: %v", err)
 	}
 
-	if err := DB.Exec(string(sqlBytes)).Error; err != nil {
-		log.Fatalf("Failed to run migrations: %v", err)
+	files := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") {
+			continue
+		}
+		files = append(files, filepath.Join("migrations", entry.Name()))
+	}
+	sort.Strings(files)
+
+	for _, path := range files {
+		sqlBytes, err := os.ReadFile(path)
+		if err != nil {
+			log.Fatalf("Failed to read migration file %s: %v", path, err)
+		}
+		if err := DB.Exec(string(sqlBytes)).Error; err != nil {
+			log.Fatalf("Failed to run migration %s: %v", path, err)
+		}
+		log.Printf("Applied migration %s", path)
 	}
 
 	log.Println("Database migrations completed")

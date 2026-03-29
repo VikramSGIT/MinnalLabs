@@ -1,4 +1,4 @@
-import { ApiError, requestJSON } from "../lib/api.js";
+import { ApiError, postJSON, requestJSON } from "../lib/api.js";
 import "./device-enrollment.js";
 
 const DEVICE_POLL_INTERVAL_MS = 5000;
@@ -73,6 +73,12 @@ function getDevicesSignature(devices) {
       product_id: String(device.product_id || ""),
       mqtt_connected: Boolean(device.mqtt_connected),
       mqtt_status: String(device.mqtt_status || ""),
+      firmware_version: String(device.firmware_version || ""),
+      target_firmware_version: String(device.target_firmware_version || ""),
+      update_available: Boolean(device.update_available),
+      rollout_id: String(device.rollout_id || ""),
+      rollout_state: String(device.rollout_state || ""),
+      rollout_batch_number: String(device.rollout_batch_number || ""),
       last_seen_at: String(device.last_seen_at || ""),
       last_status_at: String(device.last_status_at || ""),
       created_at: String(device.created_at || ""),
@@ -96,6 +102,7 @@ class HomeDeviceManager extends HTMLElement {
     this.devicePollTimer = null;
     this.isFetchingDevices = false;
     this.deletingDeviceId = "";
+    this.updatingDeviceId = "";
     this.devicesSignature = "[]";
   }
 
@@ -187,6 +194,23 @@ class HomeDeviceManager extends HTMLElement {
         }
 
         .delete-btn:disabled {
+          opacity: 0.65;
+          cursor: wait;
+        }
+
+        .update-btn {
+          border: 0;
+          border-radius: 999px;
+          padding: 0.65rem 1rem;
+          font: inherit;
+          font-size: 0.9rem;
+          font-weight: 700;
+          cursor: pointer;
+          color: #ffffff;
+          background: #2563eb;
+        }
+
+        .update-btn:disabled {
           opacity: 0.65;
           cursor: wait;
         }
@@ -345,6 +369,11 @@ class HomeDeviceManager extends HTMLElement {
           background: #fef3c7;
         }
 
+        .badge.update {
+          color: #92400e;
+          background: #fef3c7;
+        }
+
         .meta {
           display: grid;
           grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -399,14 +428,18 @@ class HomeDeviceManager extends HTMLElement {
 
     if (this.activeTab === "devices") {
       const onlineCount = this.devices.filter((device) => device.mqtt_connected).length;
+      const updateCount = this.devices.filter((device) => device.update_available).length;
       const deviceCount = this.devices.length;
-      content.innerHTML = this.renderDevicesMarkup(deviceCount, onlineCount);
+      content.innerHTML = this.renderDevicesMarkup(deviceCount, onlineCount, updateCount);
       const refreshBtn = content.querySelector("#refreshDevicesBtn");
       if (refreshBtn) {
         refreshBtn.addEventListener("click", () => this.loadDevices({ showBusyIndicator: true }));
       }
       content.querySelectorAll("[data-device-delete]").forEach((button) => {
         button.addEventListener("click", () => this.handleDeleteDevice(button.dataset.deviceDelete || ""));
+      });
+      content.querySelectorAll("[data-device-update]").forEach((button) => {
+        button.addEventListener("click", () => this.handleUpdateDevice(button.dataset.deviceUpdate || ""));
       });
     } else {
       content.innerHTML = "";
@@ -419,7 +452,7 @@ class HomeDeviceManager extends HTMLElement {
     }
   }
 
-  renderDevicesMarkup(deviceCount, onlineCount) {
+  renderDevicesMarkup(deviceCount, onlineCount, updateCount) {
     if (this.isLoadingDevices && deviceCount === 0) {
       return `
         <div class="empty">
@@ -442,7 +475,8 @@ class HomeDeviceManager extends HTMLElement {
             ${this.devices
               .map((device) => {
                 const isDeletingDevice = this.deletingDeviceId === String(device.device_id);
-                const deleteDisabled = Boolean(this.deletingDeviceId);
+                const isUpdatingDevice = this.updatingDeviceId === String(device.device_id);
+                const buttonsDisabled = Boolean(this.deletingDeviceId || this.updatingDeviceId);
                 return `
                   <article class="device">
                     <div class="device-header">
@@ -452,11 +486,26 @@ class HomeDeviceManager extends HTMLElement {
                       </div>
                       <div class="device-actions">
                         <span class="badge ${statusClass(device)}">${statusLabel(device)}</span>
+                        ${device.update_available ? '<span class="badge update">Update Available</span>' : ""}
+                        ${
+                          device.update_available
+                            ? `
+                              <button
+                                type="button"
+                                class="update-btn"
+                                data-device-update="${escapeHtml(device.device_id)}"
+                                ${buttonsDisabled ? "disabled" : ""}
+                              >
+                                ${isUpdatingDevice ? "Updating..." : "Update Now"}
+                              </button>
+                            `
+                            : ""
+                        }
                         <button
                           type="button"
                           class="delete-btn"
                           data-device-delete="${escapeHtml(device.device_id)}"
-                          ${deleteDisabled ? "disabled" : ""}
+                          ${buttonsDisabled ? "disabled" : ""}
                         >
                           ${isDeletingDevice ? "Deleting..." : "Delete Device"}
                         </button>
@@ -466,6 +515,22 @@ class HomeDeviceManager extends HTMLElement {
                       <div class="meta-item">
                         <strong>MQTT Status</strong>
                         <span>${escapeHtml(device.mqtt_status || "unknown")}</span>
+                      </div>
+                      <div class="meta-item">
+                        <strong>Current Firmware</strong>
+                        <span>${escapeHtml(device.firmware_version || "Unknown")}</span>
+                      </div>
+                      <div class="meta-item">
+                        <strong>Target Firmware</strong>
+                        <span>${escapeHtml(device.target_firmware_version || "None")}</span>
+                      </div>
+                      <div class="meta-item">
+                        <strong>Rollout State</strong>
+                        <span>${escapeHtml(device.rollout_state || "None")}</span>
+                      </div>
+                      <div class="meta-item">
+                        <strong>Rollout Batch</strong>
+                        <span>${escapeHtml(device.rollout_batch_number || "None")}</span>
                       </div>
                       <div class="meta-item">
                         <strong>Last Seen</strong>
@@ -492,6 +557,10 @@ class HomeDeviceManager extends HTMLElement {
         <article class="card">
           <p class="eyebrow">Online Now</p>
           <p class="value">${onlineCount}</p>
+        </article>
+        <article class="card">
+          <p class="eyebrow">Updates Available</p>
+          <p class="value">${updateCount}</p>
         </article>
       </div>
       <div class="toolbar">
@@ -634,6 +703,44 @@ class HomeDeviceManager extends HTMLElement {
       this.actionError = error.message;
     } finally {
       this.deletingDeviceId = "";
+      if (this.isConnected) {
+        this.renderContent();
+      }
+    }
+  }
+
+  async handleUpdateDevice(deviceID) {
+    if (!deviceID || this.updatingDeviceId || this.deletingDeviceId) {
+      return;
+    }
+
+    const device = this.devices.find((entry) => String(entry.device_id) === String(deviceID));
+    if (!device || !device.update_available) {
+      return;
+    }
+
+    this.actionError = "";
+    this.devicesError = "";
+    this.updatingDeviceId = String(deviceID);
+    if (this.activeTab === "devices") {
+      this.renderContent();
+    }
+
+    try {
+      await postJSON(`/api/enroll/device/${encodeURIComponent(deviceID)}/update`, {}, this.apiBaseUrl);
+      await this.loadDevices({ showBusyIndicator: true });
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) {
+        this.dispatchEvent(
+          new CustomEvent("session-expired", {
+            bubbles: true,
+            composed: true,
+          }),
+        );
+      }
+      this.actionError = error.message;
+    } finally {
+      this.updatingDeviceId = "";
       if (this.isConnected) {
         this.renderContent();
       }

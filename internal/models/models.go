@@ -17,6 +17,13 @@ type User struct {
 	Homes     []Home         `json:"homes,omitempty"`
 }
 
+type AdminUser struct {
+	UserID    uint      `gorm:"primaryKey" json:"user_id"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+func (AdminUser) TableName() string { return "admin_users" }
+
 type Home struct {
 	ID           uint           `gorm:"primarykey" json:"id"`
 	CreatedAt    time.Time      `json:"created_at"`
@@ -34,6 +41,11 @@ type Home struct {
 type Product struct {
 	ID                  uint                `gorm:"primarykey" json:"id"`
 	Name                string              `gorm:"uniqueIndex" json:"name"`
+	FirmwareVersion     string              `gorm:"column:firmware_version" json:"firmware_version"`
+	FirmwareFilename    string              `gorm:"column:firmware_filename" json:"firmware_filename"`
+	FirmwareMD5         string              `gorm:"column:firmware_md5" json:"firmware_md5"`
+	FirmwareUploadedAt  *time.Time          `gorm:"column:firmware_uploaded_at" json:"firmware_uploaded_at,omitempty"`
+	RolloutDelayDays    int                 `gorm:"column:rollout_delay_days" json:"rollout_delay_days"`
 	ProductCapabilities []ProductCapability `json:"product_capabilities,omitempty"`
 }
 
@@ -64,6 +76,36 @@ type Device struct {
 	Product   Product        `gorm:"foreignKey:ProductID" json:"product,omitempty"`
 	Home      Home           `gorm:"foreignKey:HomeID" json:"home,omitempty"`
 }
+
+type FirmwareRollout struct {
+	ID                   uint       `gorm:"primaryKey" json:"id"`
+	ProductID            uint       `json:"product_id"`
+	TargetVersion        string     `json:"target_version"`
+	FirmwareFilename     string     `json:"firmware_filename"`
+	FirmwareMD5          string     `json:"firmware_md5"`
+	BatchPercentage      int        `json:"batch_percentage"`
+	BatchIntervalMinutes int        `json:"batch_interval_minutes"`
+	Status               string     `json:"status"`
+	NextBatchAt          *time.Time `json:"next_batch_at,omitempty"`
+	CreatedByUserID      uint       `json:"created_by_user_id"`
+	CreatedAt            time.Time  `json:"created_at"`
+	UpdatedAt            time.Time  `json:"updated_at"`
+}
+
+func (FirmwareRollout) TableName() string { return "firmware_rollouts" }
+
+type FirmwareRolloutDevice struct {
+	RolloutID           uint       `gorm:"primaryKey" json:"rollout_id"`
+	DeviceID            uint       `gorm:"primaryKey" json:"device_id"`
+	BatchNumber         int        `json:"batch_number"`
+	State               string     `json:"state"`
+	SentAt              *time.Time `json:"sent_at,omitempty"`
+	UpdatedAt           *time.Time `json:"updated_at,omitempty"`
+	RetainedClearedAt   *time.Time `json:"retained_cleared_at,omitempty"`
+	LastReportedVersion string     `json:"last_reported_version"`
+}
+
+func (FirmwareRolloutDevice) TableName() string { return "firmware_rollout_devices" }
 
 // OAuth models
 
@@ -96,4 +138,8 @@ func BuildTopic(userID, homeID, deviceID uint, component, esphomeKey, action str
 
 func BuildStatusTopic(userID, homeID, deviceID uint) string {
 	return fmt.Sprintf("%d/%d/%d/status", userID, homeID, deviceID)
+}
+
+func BuildOTACommandTopic(userID, homeID, deviceID uint) string {
+	return fmt.Sprintf("%d/%d/%d/ota/command", userID, homeID, deviceID)
 }

@@ -38,10 +38,11 @@ type DeviceInfo struct {
 }
 
 type DevicePresence struct {
-	Online       bool      `json:"online"`
-	LastStatus   string    `json:"last_status"`
-	LastStatusAt time.Time `json:"last_status_at"`
-	LastSeenAt   time.Time `json:"last_seen_at"`
+	Online          bool      `json:"online"`
+	LastStatus      string    `json:"last_status"`
+	FirmwareVersion string    `json:"firmware_version"`
+	LastStatusAt    time.Time `json:"last_status_at"`
+	LastSeenAt      time.Time `json:"last_seen_at"`
 }
 
 // --- key helpers ---
@@ -213,17 +214,22 @@ func RemoveDevices(deviceIDs []uint) {
 }
 
 func SetDevicePresence(deviceID uint, status string) {
-	normalized := strings.ToLower(strings.TrimSpace(status))
+	raw := strings.TrimSpace(status)
+	normalized := strings.ToLower(raw)
 	now := time.Now().UTC()
 
 	presence := DevicePresence{
-		Online:       normalized == "online",
-		LastStatus:   normalized,
+		Online:       normalized == "online" || strings.HasPrefix(normalized, "online_"),
+		LastStatus:   raw,
 		LastStatusAt: now,
 	}
 
 	if current, ok := GetDevicePresence(deviceID); ok {
 		presence.LastSeenAt = current.LastSeenAt
+		presence.FirmwareVersion = current.FirmwareVersion
+	}
+	if strings.HasPrefix(normalized, "online_") && len(raw) > len("online_") {
+		presence.FirmwareVersion = strings.TrimSpace(raw[len("online_"):])
 	}
 	if presence.Online {
 		presence.LastSeenAt = now

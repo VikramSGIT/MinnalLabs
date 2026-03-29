@@ -7,6 +7,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/iot-backend/internal/config"
+	"github.com/iot-backend/internal/db"
 	localmodels "github.com/iot-backend/internal/models"
 	"github.com/iot-backend/internal/state"
 )
@@ -19,6 +20,12 @@ type SessionUser struct {
 	Token    string
 	UserID   uint   `json:"user_id"`
 	Username string `json:"username"`
+	IsAdmin  bool   `json:"is_admin"`
+}
+
+func IsAdminUser(userID uint) bool {
+	var admin localmodels.AdminUser
+	return db.DB.Select("user_id").First(&admin, "user_id = ?", userID).Error == nil
 }
 
 func initSessionConfig(cfg *config.Config) {
@@ -61,6 +68,7 @@ func restoreSessionFromRequest(r *http.Request) (SessionUser, bool) {
 		Token:    token,
 		UserID:   info.UserID,
 		Username: info.Username,
+		IsAdmin:  IsAdminUser(info.UserID),
 	}, true
 }
 
@@ -85,6 +93,21 @@ func RequireSession() gin.HandlerFunc {
 
 		http.SetCookie(c.Writer, sessionCookie(sessionUser.Token))
 		c.Set(sessionUserContextKey, sessionUser)
+		c.Next()
+	}
+}
+
+func RequireAdmin() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		sessionUser, ok := CurrentSessionUser(c)
+		if !ok {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+			return
+		}
+		if !sessionUser.IsAdmin {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "admin access required"})
+			return
+		}
 		c.Next()
 	}
 }

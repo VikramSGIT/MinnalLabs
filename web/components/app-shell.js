@@ -1,5 +1,6 @@
 import { getFrontendConfig } from "../lib/config.js";
 import { ApiError, postJSON, requestJSON } from "../lib/api.js";
+import "./admin-firmware-manager.js";
 import "./home-device-manager.js";
 import "./home-create-form.js";
 import "./login-form.js";
@@ -21,6 +22,7 @@ class AppShell extends HTMLElement {
     this.state = {
       user: null,
       home: null,
+      page: "enrollment",
       isBootstrapping: true,
       sessionError: "",
     };
@@ -32,6 +34,7 @@ class AppShell extends HTMLElement {
       this.shadowRoot.addEventListener("session-expired", () => {
         this.state.user = null;
         this.state.home = null;
+        this.state.page = "enrollment";
         this.state.sessionError = "Your session expired. Please sign in again.";
         this.render();
       });
@@ -43,11 +46,11 @@ class AppShell extends HTMLElement {
   }
 
   render() {
-    const { user, home, isBootstrapping, sessionError } = this.state;
+    const { user, home, page, isBootstrapping, sessionError } = this.state;
     const steps = [
       { label: "Login", status: user ? "complete" : "active" },
-      { label: "Choose Home", status: user && !home ? "active" : home ? "complete" : "pending" },
-      { label: "Manage Devices", status: home ? "active" : "pending" },
+      { label: "Choose Home", status: user && page !== "admin" && !home ? "active" : home ? "complete" : "pending" },
+      { label: "Manage Devices", status: page === "admin" ? "pending" : home ? "active" : "pending" },
     ];
 
     this.shadowRoot.innerHTML = `
@@ -235,7 +238,9 @@ class AppShell extends HTMLElement {
             </div>
             <div class="actions">
               ${user ? '<button id="signOutBtn">Sign Out</button>' : ""}
-              ${home ? '<button id="resetHomeBtn" class="primary">Change Home</button>' : ""}
+              ${user && user.is_admin && page !== "admin" ? '<button id="openAdminBtn" class="primary">Firmware Admin</button>' : ""}
+              ${user && user.is_admin && page === "admin" ? '<button id="closeAdminBtn" class="primary">Back To Enrollment</button>' : ""}
+              ${page !== "admin" && home ? '<button id="resetHomeBtn" class="primary">Change Home</button>' : ""}
             </div>
           </div>
           <div class="meta">
@@ -249,7 +254,7 @@ class AppShell extends HTMLElement {
             </article>
             <article class="card">
               <p class="eyebrow">Current Home</p>
-              <p class="value">${home ? `${escapeHtml(home.name)} (ID ${home.home_id})` : "Select or create a home to continue"}</p>
+              <p class="value">${page === "admin" ? "Firmware Admin" : home ? `${escapeHtml(home.name)} (ID ${home.home_id})` : "Select or create a home to continue"}</p>
             </article>
           </div>
           <div class="steps">
@@ -279,6 +284,23 @@ class AppShell extends HTMLElement {
     if (resetHomeBtn) {
       resetHomeBtn.addEventListener("click", () => {
         this.state.home = null;
+        this.state.page = "enrollment";
+        this.render();
+      });
+    }
+
+    const openAdminBtn = this.shadowRoot.getElementById("openAdminBtn");
+    if (openAdminBtn) {
+      openAdminBtn.addEventListener("click", () => {
+        this.state.page = "admin";
+        this.render();
+      });
+    }
+
+    const closeAdminBtn = this.shadowRoot.getElementById("closeAdminBtn");
+    if (closeAdminBtn) {
+      closeAdminBtn.addEventListener("click", () => {
+        this.state.page = "enrollment";
         this.render();
       });
     }
@@ -305,10 +327,19 @@ class AppShell extends HTMLElement {
       loginForm.apiBaseUrl = this.config.apiBaseUrl;
       loginForm.addEventListener("login-success", (event) => {
         this.state.user = event.detail;
+        this.state.page = "enrollment";
         this.state.sessionError = "";
         this.render();
       });
       stage.append(loginForm);
+      return;
+    }
+
+    if (this.state.user.is_admin && this.state.page === "admin") {
+      const adminFirmwareManager = document.createElement("admin-firmware-manager");
+      adminFirmwareManager.apiBaseUrl = this.config.apiBaseUrl;
+      adminFirmwareManager.user = this.state.user;
+      stage.append(adminFirmwareManager);
       return;
     }
 
@@ -318,6 +349,7 @@ class AppShell extends HTMLElement {
       homeForm.user = this.state.user;
       const handleHomeSelection = (event) => {
         this.state.home = event.detail;
+        this.state.page = "enrollment";
         this.render();
       };
       homeForm.addEventListener("home-created", handleHomeSelection);
@@ -332,6 +364,7 @@ class AppShell extends HTMLElement {
     homeDeviceManager.home = this.state.home;
     homeDeviceManager.addEventListener("home-deleted", () => {
       this.state.home = null;
+      this.state.page = "enrollment";
       this.render();
     });
     stage.append(homeDeviceManager);
@@ -344,6 +377,7 @@ class AppShell extends HTMLElement {
     try {
       const user = await requestJSON("/api/session/me", {}, this.config.apiBaseUrl);
       this.state.user = user;
+      this.state.page = "enrollment";
       this.state.sessionError = "";
     } catch (error) {
       this.state.user = null;
@@ -366,6 +400,7 @@ class AppShell extends HTMLElement {
     } finally {
       this.state.user = null;
       this.state.home = null;
+      this.state.page = "enrollment";
       this.render();
     }
   }

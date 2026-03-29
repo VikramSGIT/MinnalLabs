@@ -13,14 +13,22 @@ export async function postJSON(path, body, baseUrl = getFrontendConfig().apiBase
   return requestJSON(path, { method: "POST", body }, baseUrl);
 }
 
+export async function postFormData(path, body, baseUrl = getFrontendConfig().apiBaseUrl) {
+  return requestJSON(path, { method: "POST", body }, baseUrl);
+}
+
 export async function requestJSON(path, options = {}, baseUrl = getFrontendConfig().apiBaseUrl) {
   const headers = new Headers(options.headers || {});
   headers.set("Accept", "application/json");
 
   let body;
   if (options.body !== undefined) {
-    headers.set("Content-Type", "application/json");
-    body = JSON.stringify(options.body);
+    if (options.body instanceof FormData) {
+      body = options.body;
+    } else {
+      headers.set("Content-Type", "application/json");
+      body = JSON.stringify(options.body);
+    }
   }
 
   const response = await fetch(buildUrl(baseUrl, path), {

@@ -82,10 +82,67 @@ Device presence is tracked with retained MQTT LWT status messages on:
 {user_id}/{home_id}/{device_id}/status
 ```
 
-Each device publishes `online` as its retained birth message and `offline` as its
-retained will/shutdown message. The backend subscribes to those status topics and
-mirrors the latest value into Valkey so the enrollment APIs can return device
-status quickly without querying the broker on every request.
+Each device publishes `online_v1.0.1` (including its current firmware version)
+as its retained birth message and `offline` as its retained will/shutdown
+message. The backend subscribes to those status topics and mirrors the latest
+value into Valkey so the enrollment APIs can return device status and firmware
+version quickly without querying the broker on every request.
+
+### Firmware rollout channels
+
+Firmware rollout messages are published per device:
+
+```text
+{user_id}/{home_id}/{device_id}/ota/command
+```
+
+The backend rollout worker sends these OTA commands as **retained** messages:
+
+1. Each batch publishes one retained OTA command per selected device.
+2. If a device is offline, it receives the retained command when it reconnects.
+3. After the device reports the target firmware version in `online_vX`, the
+   backend clears the retained OTA command for that device.
+
+This allows a staged rollout without losing update commands for temporarily
+offline devices.
+
+## Firmware Hosting With Caddy
+
+The Docker stack exposes firmware files through a dedicated Caddy service on
+port `8081`. Firmware files are stored in `./firmware` and served under:
+
+```text
+http://<host>:8081/firmware/<product_id>_<version>.bin
+```
+
+Example:
+
+```text
+http://localhost:8081/firmware/1_v1.0.2.bin
+```
+
+Set this in the backend environment if you are exposing Caddy on a different
+host or domain:
+
+```env
+FIRMWARE_BASE_URL=http://localhost:8081/firmware
+```
+
+## Admin Users
+
+Admin access is controlled by the `admin_users` table, not a flag on `users`.
+To promote a user manually:
+
+```sql
+INSERT INTO admin_users (user_id) VALUES (<user_id>);
+```
+
+Admin users can:
+
+- upload firmware binaries for products
+- update the product's current firmware metadata in PostgreSQL
+- create percentage-based staged rollout jobs
+- choose the wait interval between batches in hours or days
 
 ## Run the Application
 

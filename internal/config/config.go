@@ -4,6 +4,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -44,6 +45,10 @@ type Config struct {
 		Addr     string
 		Password string
 	}
+	Firmware struct {
+		BaseURL    string
+		StorageDir string
+	}
 }
 
 func LoadConfig() *Config {
@@ -79,6 +84,8 @@ func LoadConfig() *Config {
 	viper.SetDefault("session.same_site", "Lax")
 	viper.SetDefault("valkey.addr", "localhost:6379")
 	viper.SetDefault("valkey.password", "")
+	viper.SetDefault("firmware.base_url", "http://localhost:8081/firmware")
+	viper.SetDefault("firmware.storage_dir", "./firmware")
 
 	if err := viper.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
@@ -166,4 +173,20 @@ func (c *Config) SessionSameSite() http.SameSite {
 	default:
 		return http.SameSiteLaxMode
 	}
+}
+
+func (c *Config) FirmwareStoragePath() string {
+	path := strings.TrimSpace(c.Firmware.StorageDir)
+	if path == "" {
+		return "./firmware"
+	}
+	return path
+}
+
+func (c *Config) FirmwareFileURL(filename string) string {
+	base := strings.TrimRight(strings.TrimSpace(c.Firmware.BaseURL), "/")
+	if base == "" {
+		base = "http://localhost:8081/firmware"
+	}
+	return base + "/" + url.PathEscape(filename)
 }

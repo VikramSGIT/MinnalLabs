@@ -6,12 +6,14 @@ import (
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
+	"github.com/iot-backend/internal/admin"
 	"github.com/iot-backend/internal/config"
 	"github.com/iot-backend/internal/db"
 	"github.com/iot-backend/internal/enrollment"
 	"github.com/iot-backend/internal/google"
 	"github.com/iot-backend/internal/mqtt"
 	"github.com/iot-backend/internal/oauth"
+	"github.com/iot-backend/internal/ota"
 	"github.com/iot-backend/internal/state"
 )
 
@@ -26,6 +28,7 @@ func main() {
 	state.StartSync()
 
 	mqtt.InitMQTT(cfg)
+	ota.StartWorker(cfg)
 
 	oauth.InitOAuth()
 
@@ -41,6 +44,7 @@ func main() {
 	oauth.SetupOAuthRoutes(r, cfg)
 	google.SetupGoogleRoutes(r)
 	enrollment.SetupEnrollmentRoutes(r, cfg)
+	admin.SetupAdminRoutes(r, cfg)
 
 	serverAddr := cfg.Server.Host + ":" + cfg.Server.Port
 	log.Printf("Starting HTTP server on %s", serverAddr)

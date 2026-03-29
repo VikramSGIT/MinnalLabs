@@ -18,3 +18,7 @@ Thumbs.db
 
 # Go
 vendor/
+
+# Firmware uploads
+firmware/*
+!firmware/.gitkeep

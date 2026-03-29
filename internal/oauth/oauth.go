@@ -110,6 +110,14 @@ func authenticateUser(username, password string) (*localmodels.User, error) {
 	return &user, nil
 }
 
+func authResponse(user *localmodels.User) gin.H {
+	return gin.H{
+		"user_id":  user.ID,
+		"username": user.Username,
+		"is_admin": IsAdminUser(user.ID),
+	}
+}
+
 // SetupOAuthRoutes adds OAuth endpoints to the Gin router
 func SetupOAuthRoutes(r *gin.Engine, cfg *config.Config) {
 	initSessionConfig(cfg)
@@ -176,10 +184,7 @@ func SetupOAuthRoutes(r *gin.Engine, cfg *config.Config) {
 				return
 			}
 
-			c.JSON(http.StatusOK, gin.H{
-				"user_id":  user.ID,
-				"username": user.Username,
-			})
+			c.JSON(http.StatusOK, authResponse(user))
 		})
 
 		protected := api.Group("")
@@ -194,6 +199,7 @@ func SetupOAuthRoutes(r *gin.Engine, cfg *config.Config) {
 			c.JSON(http.StatusOK, gin.H{
 				"user_id":  sessionUser.UserID,
 				"username": sessionUser.Username,
+				"is_admin": sessionUser.IsAdmin,
 			})
 		})
 		protected.POST("/logout", func(c *gin.Context) {

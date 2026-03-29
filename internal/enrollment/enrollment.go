@@ -15,6 +15,7 @@ import (
 	"github.com/iot-backend/internal/models"
 	"github.com/iot-backend/internal/mqtt"
 	"github.com/iot-backend/internal/oauth"
+	"github.com/iot-backend/internal/ota"
 	"github.com/iot-backend/internal/state"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
@@ -56,6 +57,7 @@ func SetupEnrollmentRoutes(r *gin.Engine, appCfg *config.Config) {
 		protected.DELETE("/home/:homeID", deleteHome)
 		protected.DELETE("/device/:deviceID", deleteDevice)
 		protected.GET("/device/:deviceID/status", getDeviceStatus)
+		protected.POST("/device/:deviceID/update", triggerDeviceUpdate)
 		protected.POST("/home", enrollHome)
 		protected.POST("/device", enrollDevice)
 	}
@@ -119,6 +121,16 @@ func listHomes(c *gin.Context) {
 	c.JSON(http.StatusOK, response)
 }
 
+func firmwareState(device models.Device, presence state.DevicePresence, presenceFound bool) (string, string, bool) {
+	current := ""
+	if presenceFound {
+		current = presence.FirmwareVersion
+	}
+	target := device.Product.FirmwareVersion
+	updateAvailable := current != "" && target != "" && current != target
+	return current, target, updateAvailable
+}
+
 func listHomeDevices(c *gin.Context) {
 	sessionUser, ok := oauth.CurrentSessionUser(c)
 	if !ok {
@@ -145,6 +157,7 @@ func listHomeDevices(c *gin.Context) {
 
 	var devices []models.Device
 	if err := db.DB.
+		Preload("Product").
 		Where("home_id = ?", homeID).
 		Order("created_at DESC, id DESC").
 		Find(&devices).Error; err != nil {
@@ -155,22 +168,40 @@ func listHomeDevices(c *gin.Context) {
 	response := make([]gin.H, 0, len(devices))
 	for _, device := range devices {
 		item := gin.H{
-			"device_id":      device.ID,
-			"name":           device.Name,
-			"product_id":     device.ProductID,
-			"mqtt_connected": false,
-			"mqtt_status":    "unknown",
-			"created_at":     device.CreatedAt,
+			"device_id":               device.ID,
+			"name":                    device.Name,
+			"product_id":              device.ProductID,
+			"mqtt_connected":          false,
+			"mqtt_status":             "unknown",
+			"firmware_version":        "",
+			"target_firmware_version": device.Product.FirmwareVersion,
+			"update_available":        false,
+			"rollout_state":           "",
+			"rollout_batch_number":    0,
+			"rollout_id":              0,
+			"created_at":              device.CreatedAt,
 		}
 
 		if presence, found := state.GetDevicePresence(device.ID); found {
 			item["mqtt_connected"] = presence.Online
 			item["mqtt_status"] = presence.LastStatus
+			currentFirmware, targetFirmware, updateAvailable := firmwareState(device, presence, true)
+			item["firmware_version"] = currentFirmware
+			item["target_firmware_version"] = targetFirmware
+			item["update_available"] = updateAvailable
 			if !presence.LastStatusAt.IsZero() {
 				item["last_status_at"] = presence.LastStatusAt
 			}
 			if !presence.LastSeenAt.IsZero() {
 				item["last_seen_at"] = presence.LastSeenAt
+			}
+		}
+		if rolloutInfo, found := ota.GetDeviceRolloutInfo(device.ID); found {
+			item["rollout_state"] = rolloutInfo.State
+			item["rollout_batch_number"] = rolloutInfo.BatchNumber
+			item["rollout_id"] = rolloutInfo.RolloutID
+			if item["target_firmware_version"] == "" {
+				item["target_firmware_version"] = rolloutInfo.TargetVersion
 			}
 		}
 
@@ -195,7 +226,7 @@ func getDeviceStatus(c *gin.Context) {
 	deviceID := uint(deviceIDValue)
 
 	var device models.Device
-	if err := db.DB.Select("id, user_id").First(&device, deviceID).Error; err != nil {
+	if err := db.DB.Preload("Product").Select("id, user_id, product_id").First(&device, deviceID).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "device not found"})
 		return
 	}
@@ -207,19 +238,94 @@ func getDeviceStatus(c *gin.Context) {
 	presence, found := state.GetDevicePresence(deviceID)
 	if !found {
 		c.JSON(http.StatusOK, gin.H{
-			"device_id":      deviceID,
-			"mqtt_connected": false,
-			"mqtt_status":    "unknown",
+			"device_id":               deviceID,
+			"mqtt_connected":          false,
+			"mqtt_status":             "unknown",
+			"firmware_version":        "",
+			"target_firmware_version": device.Product.FirmwareVersion,
+			"update_available":        false,
+			"rollout_state":           "",
+			"rollout_batch_number":    0,
+			"rollout_id":              0,
 		})
 		return
 	}
 
+	currentFirmware, targetFirmware, updateAvailable := firmwareState(device, presence, true)
+	response := gin.H{
+		"device_id":               deviceID,
+		"mqtt_connected":          presence.Online,
+		"mqtt_status":             presence.LastStatus,
+		"firmware_version":        currentFirmware,
+		"target_firmware_version": targetFirmware,
+		"update_available":        updateAvailable,
+		"rollout_state":           "",
+		"rollout_batch_number":    0,
+		"rollout_id":              0,
+		"last_status_at":          presence.LastStatusAt,
+		"last_seen_at":            presence.LastSeenAt,
+	}
+	if rolloutInfo, found := ota.GetDeviceRolloutInfo(device.ID); found {
+		response["rollout_state"] = rolloutInfo.State
+		response["rollout_batch_number"] = rolloutInfo.BatchNumber
+		response["rollout_id"] = rolloutInfo.RolloutID
+		if response["target_firmware_version"] == "" {
+			response["target_firmware_version"] = rolloutInfo.TargetVersion
+		}
+	}
+	c.JSON(http.StatusOK, response)
+}
+
+func triggerDeviceUpdate(c *gin.Context) {
+	sessionUser, ok := oauth.CurrentSessionUser(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	deviceIDValue, err := strconv.ParseUint(c.Param("deviceID"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid device id"})
+		return
+	}
+	deviceID := uint(deviceIDValue)
+
+	var device models.Device
+	if err := db.DB.Preload("Product").First(&device, deviceID).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "device not found"})
+		return
+	}
+	if device.UserID != sessionUser.UserID {
+		c.JSON(http.StatusForbidden, gin.H{"error": "device does not belong to user"})
+		return
+	}
+	if device.Product.FirmwareVersion == "" || device.Product.FirmwareFilename == "" || device.Product.FirmwareMD5 == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "no firmware uploaded for this product"})
+		return
+	}
+
+	if presence, found := state.GetDevicePresence(device.ID); found && presence.FirmwareVersion != "" && presence.FirmwareVersion == device.Product.FirmwareVersion {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "device already has the latest firmware"})
+		return
+	}
+
+	if err := mqtt.PublishDeviceFirmwareUpdateNow(
+		device,
+		device.Product.FirmwareVersion,
+		cfg.FirmwareFileURL(device.Product.FirmwareFilename),
+		device.Product.FirmwareMD5,
+	); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	ota.MarkDeviceRolloutSent(device.ID)
+
 	c.JSON(http.StatusOK, gin.H{
-		"device_id":      deviceID,
-		"mqtt_connected": presence.Online,
-		"mqtt_status":    presence.LastStatus,
-		"last_status_at": presence.LastStatusAt,
-		"last_seen_at":   presence.LastSeenAt,
+		"device_id":        device.ID,
+		"product_id":       device.ProductID,
+		"firmware_version": device.Product.FirmwareVersion,
+		"firmware_url":     cfg.FirmwareFileURL(device.Product.FirmwareFilename),
+		"queued":           true,
 	})
 }
 
@@ -283,6 +389,9 @@ func deleteHome(c *gin.Context) {
 
 	for _, device := range devices {
 		mqtt.UnsubscribeDevice(device)
+		if err := mqtt.ClearRetainedDeviceFirmwareUpdate(device); err != nil {
+			log.Printf("Failed clearing retained ota for deleted device %d: %v", device.ID, err)
+		}
 	}
 	deviceIDs := make([]uint, 0, len(devices))
 	for _, device := range devices {
@@ -327,6 +436,9 @@ func deleteDevice(c *gin.Context) {
 	}
 
 	mqtt.UnsubscribeDevice(device)
+	if err := mqtt.ClearRetainedDeviceFirmwareUpdate(device); err != nil {
+		log.Printf("Failed clearing retained ota for deleted device %d: %v", device.ID, err)
+	}
 	state.RemoveDevice(device.ID)
 
 	c.JSON(http.StatusOK, gin.H{

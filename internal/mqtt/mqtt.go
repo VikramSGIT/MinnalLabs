@@ -12,6 +12,11 @@ import (
 )
 
 var Client pahomqtt.Client
+var statusUpdateHook func(deviceID uint, status string)
+
+func RegisterStatusUpdateHook(hook func(deviceID uint, status string)) {
+	statusUpdateHook = hook
+}
 
 func InitMQTT(cfg *config.Config) {
 	opts := pahomqtt.NewClientOptions()
@@ -45,6 +50,9 @@ var messagePubHandler pahomqtt.MessageHandler = func(client pahomqtt.Client, msg
 
 		payload := string(msg.Payload())
 		state.SetDevicePresence(uint(deviceID), payload)
+		if statusUpdateHook != nil {
+			statusUpdateHook(uint(deviceID), payload)
+		}
 		log.Printf("MQTT: device %d status = %s", deviceID, payload)
 		return
 	}

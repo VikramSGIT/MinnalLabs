@@ -13,6 +13,8 @@ services:
     container_name: iot-backend
     ports:
       - 8080:8080
+    volumes:
+      - ./firmware:/app/firmware
     environment:
       - SERVER_PORT=8080
       - DATABASE_HOST=${DATABASE_HOST}
@@ -27,8 +29,20 @@ services:
       - FRONTEND_ALLOWED_ORIGINS=${FRONTEND_ALLOWED_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
       - SESSION_SECURE=${SESSION_SECURE:-false}
       - VALKEY_ADDR=valkey:6379
+      - FIRMWARE_BASE_URL=${FIRMWARE_BASE_URL:-http://localhost:8081/firmware}
+      - FIRMWARE_STORAGE_DIR=/app/firmware
     depends_on:
       - valkey
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: iot-firmware-caddy
+    ports:
+      - 8081:80
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./firmware:/srv/firmware:ro
     restart: unless-stopped
 
   frontend:
