@@ -565,12 +565,6 @@ class HomeDeviceManager extends HTMLElement {
     } else if (showBusyIndicator) {
       this.isRefreshingDevices = true;
     }
-    if (showBusyIndicator) {
-      shouldUpdateView = true;
-    }
-    if (this.activeTab === "devices" && this.isConnected && shouldUpdateView) {
-      this.renderContent();
-    }
 
     try {
       const response = await requestJSON(`/api/enroll/home/${encodeURIComponent(this.home.home_id)}/devices`, {}, this.apiBaseUrl);
