@@ -130,10 +130,12 @@ location with a `.md5` suffix, for example:
 http://localhost:8081/firmware/1_v1.0.2.bin.md5
 ```
 
-The backend reads `firmware_url` and `firmware_md5_url` directly from the
-`products` table when publishing OTA commands. Those URLs can be provisioned by
-another backend or deployment workflow; this service no longer derives them
-from a local base URL setting.
+The backend reads `firmware_url` and `firmware_md5_url` from the `products`
+table when publishing OTA commands. Those values can be provisioned by another
+backend or deployment workflow. The stored value may be either a root/base URL
+or an existing artifact URL; this service derives the version-specific
+`<product_id>_<version>.bin` and `.bin.md5` paths from the current firmware
+version when building OTA links.
 
 ## Admin Users
 

@@ -2,6 +2,7 @@ package models
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -142,4 +143,67 @@ func BuildStatusTopic(userID, homeID, deviceID uint) string {
 
 func BuildOTACommandTopic(userID, homeID, deviceID uint) string {
 	return fmt.Sprintf("%d/%d/%d/firmware_update", userID, homeID, deviceID)
+}
+
+func BuildFirmwareBaseName(productID uint, version string) string {
+	return fmt.Sprintf("%d_%s", productID, strings.TrimSpace(version))
+}
+
+func BuildFirmwareFilename(productID uint, version string) string {
+	return BuildFirmwareBaseName(productID, version) + ".bin"
+}
+
+func BuildFirmwareMD5Filename(productID uint, version string) string {
+	return BuildFirmwareBaseName(productID, version) + ".bin.md5"
+}
+
+func firmwareBaseDir(rawURL string) string {
+	rawURL = strings.TrimRight(strings.TrimSpace(rawURL), "/")
+	if rawURL == "" {
+		return ""
+	}
+
+	lower := strings.ToLower(rawURL)
+	if strings.HasSuffix(lower, ".bin.md5") || strings.HasSuffix(lower, ".bin") || strings.HasSuffix(lower, ".md5") {
+		idx := strings.LastIndex(rawURL, "/")
+		if idx <= 0 {
+			return ""
+		}
+		rawURL = rawURL[:idx]
+	}
+	return strings.TrimRight(rawURL, "/")
+}
+
+func DeriveFirmwareURL(baseURL string, productID uint, version string) string {
+	baseURL = firmwareBaseDir(baseURL)
+	version = strings.TrimSpace(version)
+	if baseURL == "" || productID == 0 || version == "" {
+		return ""
+	}
+
+	if strings.HasSuffix(strings.ToLower(baseURL), "/firmware") {
+		return baseURL + "/" + BuildFirmwareFilename(productID, version)
+	}
+	return baseURL + "/firmware/" + BuildFirmwareFilename(productID, version)
+}
+
+func DeriveFirmwareMD5URL(firmwareURLBase, md5URLBase string, productID uint, version string) string {
+	md5URLBase = firmwareBaseDir(md5URLBase)
+	version = strings.TrimSpace(version)
+	if productID == 0 || version == "" {
+		return ""
+	}
+
+	if md5URLBase != "" {
+		if strings.HasSuffix(strings.ToLower(md5URLBase), "/firmware") {
+			return md5URLBase + "/" + BuildFirmwareMD5Filename(productID, version)
+		}
+		return md5URLBase + "/firmware/" + BuildFirmwareMD5Filename(productID, version)
+	}
+
+	firmwareURL := DeriveFirmwareURL(firmwareURLBase, productID, version)
+	if firmwareURL == "" {
+		return ""
+	}
+	return firmwareURL + ".md5"
 }

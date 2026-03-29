@@ -78,18 +78,6 @@ func sanitizeVersion(version string) string {
 	return versionSanitizer.ReplaceAllString(strings.TrimSpace(version), "_")
 }
 
-func buildFirmwareBaseName(productID uint, version string) string {
-	return fmt.Sprintf("%d_%s", productID, version)
-}
-
-func buildFirmwareFilename(productID uint, version string) string {
-	return buildFirmwareBaseName(productID, version) + ".bin"
-}
-
-func buildFirmwareMD5Filename(productID uint, version string) string {
-	return buildFirmwareBaseName(productID, version) + ".bin.md5"
-}
-
 func effectiveRolloutPercentage(product models.Product) int {
 	if product.RolloutPercentage >= 1 && product.RolloutPercentage <= 100 {
 		return product.RolloutPercentage
@@ -105,11 +93,11 @@ func effectiveRolloutIntervalMinutes(product models.Product) int {
 }
 
 func effectiveFirmwareURL(product models.Product) string {
-	return strings.TrimSpace(product.FirmwareURL)
+	return models.DeriveFirmwareURL(product.FirmwareURL, product.ID, product.FirmwareVersion)
 }
 
 func effectiveFirmwareMD5URL(product models.Product) string {
-	return strings.TrimSpace(product.FirmwareMD5URL)
+	return models.DeriveFirmwareMD5URL(product.FirmwareURL, product.FirmwareMD5URL, product.ID, product.FirmwareVersion)
 }
 
 func normalizeBatchIntervalMinutes(value int, unit string) (int, error) {
@@ -170,7 +158,7 @@ func uploadFirmware(c *gin.Context) {
 		return
 	}
 
-	filename := buildFirmwareFilename(product.ID, version)
+	filename := models.BuildFirmwareFilename(product.ID, version)
 	path := filepath.Join(cfg.FirmwareStoragePath(), filename)
 	if err := c.SaveUploadedFile(fileHeader, path); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save firmware file"})
@@ -183,7 +171,7 @@ func uploadFirmware(c *gin.Context) {
 		return
 	}
 
-	md5Filename := buildFirmwareMD5Filename(product.ID, version)
+	md5Filename := models.BuildFirmwareMD5Filename(product.ID, version)
 	md5Path := filepath.Join(cfg.FirmwareStoragePath(), md5Filename)
 	if err := os.WriteFile(md5Path, []byte(md5sum), 0o644); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to write firmware md5 file"})
@@ -198,6 +186,8 @@ func uploadFirmware(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to persist firmware metadata"})
 		return
 	}
+	product.FirmwareVersion = version
+	product.FirmwareUploadedAt = &now
 
 	c.JSON(http.StatusOK, gin.H{
 		"product_id":           product.ID,

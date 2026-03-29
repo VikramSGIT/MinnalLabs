@@ -88,11 +88,11 @@ func currentDeviceFirmwareVersion(device models.Device) string {
 }
 
 func currentProductMD5URL(product models.Product) string {
-	return strings.TrimSpace(product.FirmwareMD5URL)
+	return models.DeriveFirmwareMD5URL(product.FirmwareURL, product.FirmwareMD5URL, product.ID, product.FirmwareVersion)
 }
 
 func currentProductFirmwareURL(product models.Product) string {
-	return strings.TrimSpace(product.FirmwareURL)
+	return models.DeriveFirmwareURL(product.FirmwareURL, product.ID, product.FirmwareVersion)
 }
 
 func StartWorker(cfg *config.Config) {
@@ -418,7 +418,7 @@ func dispatchNextBatch(rollout models.FirmwareRollout) error {
 	}
 
 	var product models.Product
-	if err := db.DB.Select("id, firmware_url, firmware_md5_url").
+	if err := db.DB.Select("id, firmware_version, firmware_url, firmware_md5_url").
 		First(&product, rollout.ProductID).Error; err != nil {
 		return fmt.Errorf("load rollout product: %w", err)
 	}

@@ -133,11 +133,11 @@ func firmwareState(device models.Device, presence state.DevicePresence, presence
 }
 
 func firmwareMD5URL(product models.Product) string {
-	return strings.TrimSpace(product.FirmwareMD5URL)
+	return models.DeriveFirmwareMD5URL(product.FirmwareURL, product.FirmwareMD5URL, product.ID, product.FirmwareVersion)
 }
 
 func firmwareURL(product models.Product) string {
-	return strings.TrimSpace(product.FirmwareURL)
+	return models.DeriveFirmwareURL(product.FirmwareURL, product.ID, product.FirmwareVersion)
 }
 
 func listHomeDevices(c *gin.Context) {
