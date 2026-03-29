@@ -524,13 +524,26 @@ func HandleDeviceStatusUpdate(deviceID uint, status string) {
 	}
 	version := strings.TrimSpace(raw[len("online_"):])
 	now := time.Now().UTC()
+	retainedCleared := false
+
+	clearRetained := func(target models.Device) *time.Time {
+		if retainedCleared {
+			cleared := now
+			return &cleared
+		}
+		if err := mqtt.ClearRetainedDeviceFirmwareUpdate(target); err != nil {
+			log.Printf("Failed clearing retained OTA command for device %d: %v", target.ID, err)
+			return nil
+		}
+		retainedCleared = true
+		cleared := now
+		return &cleared
+	}
 
 	var device models.Device
 	if err := db.DB.Preload("Product").First(&device, deviceID).Error; err == nil {
 		if device.Product.FirmwareVersion != "" && version == device.Product.FirmwareVersion {
-			if err := mqtt.ClearRetainedDeviceFirmwareUpdate(device); err != nil {
-				log.Printf("Failed clearing retained OTA command for device %d: %v", deviceID, err)
-			}
+			_ = clearRetained(device)
 		}
 	}
 
@@ -568,13 +581,7 @@ func HandleDeviceStatusUpdate(deviceID uint, status string) {
 			HomeID:    match.HomeID,
 			ProductID: match.ProductID,
 		}
-		retainedClearedAt := (*time.Time)(nil)
-		if err := mqtt.ClearRetainedDeviceFirmwareUpdate(retainedDevice); err == nil {
-			cleared := now
-			retainedClearedAt = &cleared
-		} else {
-			log.Printf("Failed clearing retained OTA command for device %d: %v", match.DeviceID, err)
-		}
+		retainedClearedAt := clearRetained(retainedDevice)
 
 		updates := map[string]interface{}{
 			"state":                 rolloutDeviceUpdated,

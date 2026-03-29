@@ -82,6 +82,8 @@ esp32:
 
 logger:
 
+json:
+
 globals:
   - id: g_user_id
     type: std::string
@@ -154,25 +156,37 @@ mqtt:
           return;
         }
         std::string ota_topic = id(g_user_id) + "/" + id(g_home_id) + "/" + id(g_device_id) + "/firmware_update";
-        id(my_mqtt).subscribe_json(ota_topic, [=](const std::string &topic, JsonObject root) {
-          if (!root["version"].is<const char *>() || !root["url"].is<const char *>() || !root["md5_url"].is<const char *>()) {
-            ESP_LOGW("ota", "Ignoring OTA command missing version/url/md5_url");
+        id(my_mqtt).subscribe(ota_topic, [=](const std::string &topic, const std::string &payload) {
+          if (payload.empty()) {
+            ESP_LOGI("ota", "Received empty OTA payload, clearing pending OTA state");
+            id(clear_pending_ota).execute();
             return;
           }
 
-          std::string target_version = std::string(root["version"].as<const char *>());
-          if (target_version == "${firmware_version}") {
-            ESP_LOGI("ota", "Already on firmware %s, ignoring OTA command", target_version.c_str());
-            return;
+          bool parsed = json::parse_json(payload, [=](JsonObject root) -> bool {
+            if (!root["version"].is<const char *>() || !root["url"].is<const char *>() || !root["md5_url"].is<const char *>()) {
+              ESP_LOGW("ota", "Ignoring OTA command missing version/url/md5_url");
+              return false;
+            }
+
+            std::string target_version = std::string(root["version"].as<const char *>());
+            if (target_version == "${firmware_version}") {
+              ESP_LOGI("ota", "Already on firmware %s, ignoring OTA command", target_version.c_str());
+              return true;
+            }
+
+            id(g_ota_target_version) = target_version;
+            id(g_ota_url) = std::string(root["url"].as<const char *>());
+            id(g_ota_md5_url) = std::string(root["md5_url"].as<const char *>());
+            global_preferences->sync();
+
+            ESP_LOGI("ota", "Queued OTA version %s from %s", id(g_ota_target_version).c_str(), id(g_ota_url).c_str());
+            id(run_pending_ota).execute();
+            return true;
+          });
+          if (!parsed) {
+            ESP_LOGW("ota", "Ignoring invalid OTA JSON payload");
           }
-
-          id(g_ota_target_version) = target_version;
-          id(g_ota_url) = std::string(root["url"].as<const char *>());
-          id(g_ota_md5_url) = std::string(root["md5_url"].as<const char *>());
-          global_preferences->sync();
-
-          ESP_LOGI("ota", "Queued OTA version %s from %s", id(g_ota_target_version).c_str(), id(g_ota_url).c_str());
-          id(run_pending_ota).execute();
         });
         ota_topic_registered = true;
         ESP_LOGI("ota", "Subscribed to OTA topic %s", ota_topic.c_str());
