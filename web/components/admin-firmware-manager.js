@@ -327,8 +327,15 @@ class AdminFirmwareManager extends HTMLElement {
     }
 
     const file = this.fileInput?.files?.[0];
+    const version = this.versionInput?.value.trim() || "";
     if (!file) {
       this.errorMessage = "Choose a firmware file to upload.";
+      this.successMessage = "";
+      this.render();
+      return;
+    }
+    if (!version) {
+      this.errorMessage = "Enter a firmware version.";
       this.successMessage = "";
       this.render();
       return;
@@ -341,7 +348,7 @@ class AdminFirmwareManager extends HTMLElement {
 
     try {
       const formData = new FormData();
-      formData.append("version", this.versionInput.value.trim());
+      formData.append("version", version);
       formData.append("file", file);
 
       const response = await postFormData(`/api/admin/products/${encodeURIComponent(this.selectedProductId)}/firmware`, formData, this.apiBaseUrl);
@@ -365,6 +372,12 @@ class AdminFirmwareManager extends HTMLElement {
       return;
     }
 
+    const rolloutPayload = {
+      batch_percentage: Number.parseInt(this.batchPercentageInput?.value || "0", 10) || 0,
+      batch_interval_value: Number.parseInt(this.batchIntervalValueInput?.value || "0", 10) || 0,
+      batch_interval_unit: this.batchIntervalUnitInput?.value || "hours",
+    };
+
     this.isRollingOut = true;
     this.errorMessage = "";
     this.successMessage = "";
@@ -373,11 +386,7 @@ class AdminFirmwareManager extends HTMLElement {
     try {
       const response = await postJSON(
         `/api/admin/products/${encodeURIComponent(this.selectedProductId)}/rollout`,
-        {
-          batch_percentage: Number.parseInt(this.batchPercentageInput.value || "0", 10) || 0,
-          batch_interval_value: Number.parseInt(this.batchIntervalValueInput.value || "0", 10) || 0,
-          batch_interval_unit: this.batchIntervalUnitInput.value || "hours",
-        },
+        rolloutPayload,
         this.apiBaseUrl,
       );
       this.successMessage = `Created rollout #${response.rollout_id} for ${response.eligible_devices} eligible device(s) across ${response.total_batches} batch(es).`;
