@@ -24,8 +24,6 @@ class HomeCreateForm extends HTMLElement {
       name: "",
       wifiSsid: "",
       wifiPassword: "",
-      mqttUsername: "",
-      mqttPassword: "",
     };
   }
 
@@ -207,7 +205,7 @@ class HomeCreateForm extends HTMLElement {
       </style>
       <section class="panel">
         <h2>Select Or Create Home</h2>
-        <p>Choose an existing home or create a new one with the Wi-Fi and MQTT credentials that should be issued to devices for that home.</p>
+        <p>Choose an existing home or create a new one with the Wi-Fi details for that home. MQTT credentials will be generated automatically by the backend.</p>
         <div class="badge">Signed in as ${escapeHtml(username)}</div>
         <section class="section">
           <h3>Previously Created Homes</h3>
@@ -228,16 +226,6 @@ class HomeCreateForm extends HTMLElement {
               <label>
                 Wi-Fi Password
                 <input id="wifiPassword" name="wifiPassword" type="password" placeholder="Optional for open networks">
-              </label>
-            </div>
-            <div class="grid">
-              <label>
-                MQTT Username
-                <input id="mqttUsername" name="mqttUsername" type="text" placeholder="Provided by you" required>
-              </label>
-              <label>
-                MQTT Password
-                <input id="mqttPassword" name="mqttPassword" type="password" placeholder="Provided by you" required>
               </label>
             </div>
           </div>
@@ -281,8 +269,6 @@ class HomeCreateForm extends HTMLElement {
       name: this.formState.name.trim(),
       wifi_ssid: this.formState.wifiSsid.trim(),
       wifi_password: this.formState.wifiPassword,
-      mqtt_username: this.formState.mqttUsername.trim(),
-      mqtt_password: this.formState.mqttPassword,
     };
 
     try {
@@ -364,8 +350,6 @@ class HomeCreateForm extends HTMLElement {
       name: this.shadowRoot.getElementById("name")?.value || "",
       wifiSsid: this.shadowRoot.getElementById("wifiSsid")?.value || "",
       wifiPassword: this.shadowRoot.getElementById("wifiPassword")?.value || "",
-      mqttUsername: this.shadowRoot.getElementById("mqttUsername")?.value || "",
-      mqttPassword: this.shadowRoot.getElementById("mqttPassword")?.value || "",
     };
   }
 
@@ -373,8 +357,6 @@ class HomeCreateForm extends HTMLElement {
     const name = this.shadowRoot.getElementById("name");
     const wifiSsid = this.shadowRoot.getElementById("wifiSsid");
     const wifiPassword = this.shadowRoot.getElementById("wifiPassword");
-    const mqttUsername = this.shadowRoot.getElementById("mqttUsername");
-    const mqttPassword = this.shadowRoot.getElementById("mqttPassword");
 
     if (name) {
       name.value = this.formState.name;
@@ -384,12 +366,6 @@ class HomeCreateForm extends HTMLElement {
     }
     if (wifiPassword) {
       wifiPassword.value = this.formState.wifiPassword;
-    }
-    if (mqttUsername) {
-      mqttUsername.value = this.formState.mqttUsername;
-    }
-    if (mqttPassword) {
-      mqttPassword.value = this.formState.mqttPassword;
     }
   }
 

@@ -1,4 +1,4 @@
-import { ApiError, postJSON } from "../lib/api.js";
+import { ApiError, postJSON, requestJSON } from "../lib/api.js";
 
 function escapeHtml(value) {
   return String(value)
@@ -23,6 +23,46 @@ const UUIDS = {
   homeId: "12345678-1234-1234-1234-00000000000a",
   restart: "12345678-1234-1234-1234-00000000000b",
 };
+
+const MQTT_WAIT_TIMEOUT_MS = 60_000;
+const MQTT_WAIT_INTERVAL_MS = 2_000;
+
+function sleep(ms) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function formatTimestamp(value) {
+  if (!value) {
+    return "Not seen yet";
+  }
+
+  const timestamp = new Date(value);
+  if (Number.isNaN(timestamp.getTime())) {
+    return "Not seen yet";
+  }
+
+  return timestamp.toLocaleString();
+}
+
+function formatReconnectStatus(status) {
+  if (!status) {
+    return "Waiting for reconnect";
+  }
+
+  if (status.mqtt_connected) {
+    return "Connected after reboot";
+  }
+
+  if (status.mqtt_status === "offline") {
+    return "Seen offline";
+  }
+
+  if (status.mqtt_status === "unknown") {
+    return "Waiting for first MQTT status";
+  }
+
+  return "Waiting for reconnect";
+}
 
 class DeviceEnrollment extends HTMLElement {
   constructor() {
@@ -518,7 +558,29 @@ class DeviceEnrollment extends HTMLElement {
       this.log("Triggering save and restart...", "info");
       const restartCharacteristic = await this.mainService.getCharacteristic(UUIDS.restart);
       await restartCharacteristic.writeValue(new TextEncoder().encode("1"));
-      this.log("Provisioning complete. The device is saving and restarting.", "success");
+      this.log("Provisioning data written. Waiting for the device to reboot and reconnect to MQTT...", "info");
+
+      const mqttStatus = await this.waitForDeviceOnline(device.device_id);
+      if (!mqttStatus || !mqttStatus.mqtt_connected) {
+        this.renderSummary(device, deviceName, mqttStatus);
+        this.setError("Provisioning data was written, but MQTT reconnect was not observed within 60 seconds.");
+        this.log("Timed out waiting for the device to reconnect to MQTT.", "error");
+        return;
+      }
+
+      this.renderSummary(device, deviceName, mqttStatus);
+      this.log(`Device connected to MQTT after reboot at ${formatTimestamp(mqttStatus.last_seen_at)}.`, "success");
+      this.dispatchEvent(
+        new CustomEvent("device-provisioned", {
+          bubbles: true,
+          composed: true,
+          detail: {
+            device,
+            deviceName,
+            mqttStatus,
+          },
+        }),
+      );
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) {
         this.dispatchEvent(
@@ -537,7 +599,23 @@ class DeviceEnrollment extends HTMLElement {
     }
   }
 
-  renderSummary(device, deviceName) {
+  async waitForDeviceOnline(deviceId) {
+    const deadline = Date.now() + MQTT_WAIT_TIMEOUT_MS;
+    let lastStatus = null;
+
+    while (Date.now() < deadline) {
+      const status = await requestJSON(`/api/enroll/device/${encodeURIComponent(deviceId)}/status`, {}, this.apiBaseUrl);
+      lastStatus = status;
+      if (status.mqtt_connected) {
+        return status;
+      }
+      await sleep(MQTT_WAIT_INTERVAL_MS);
+    }
+
+    return lastStatus;
+  }
+
+  renderSummary(device, deviceName, mqttStatus = null) {
     this.summaryEl.classList.add("visible");
     this.summaryEl.innerHTML = [
       ["Device Name", deviceName],
@@ -546,6 +624,8 @@ class DeviceEnrollment extends HTMLElement {
       ["Home ID", device.home_id],
       ["MQTT Host", device.mqtt_host],
       ["MQTT Port", device.mqtt_port],
+      ["MQTT Reconnect", formatReconnectStatus(mqttStatus)],
+      ["Last MQTT Seen", formatTimestamp(mqttStatus?.last_seen_at)],
       ["MQTT Username", device.mqtt_username || "Not set"],
       ["Wi-Fi SSID", device.wifi_ssid || "Not set"],
     ]

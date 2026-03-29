@@ -28,18 +28,59 @@ To securely connect Google to your local server:
    * Service Type: `HTTP`
    * URL: `backend:8080` (this resolves to the `backend` container inside the Docker network).
 
+## MQTT Broker Setup
+
+This backend assumes your MQTT broker is an external Mosquitto instance and that
+the backend connects using a Dynamic Security admin client. The backend uses
+that admin connection to create one MQTT username/password per home and to add
+ACLs limited to that home's topic prefix.
+
+### Required broker capabilities
+
+1. Mosquitto Dynamic Security plugin enabled.
+2. A backend admin MQTT client with permission to manage `$CONTROL/dynamic-security/#`.
+3. Backend environment variables set with that admin client's credentials:
+   ```env
+   MQTT_BROKER=tcp://your-broker-host:1883
+   MQTT_USERNAME=backend-admin
+   MQTT_PASSWORD=backend-admin-password
+   MQTT_HOST=your-broker-host
+   MQTT_PORT=1883
+   ```
+
+### Example Dynamic Security bootstrap
+
+Create an admin user and grant it the built-in `super-admin` role. With
+`mosquitto_ctrl`, the typical setup is:
+
+```bash
+mosquitto_ctrl dynsec init /path/to/dynamic-security.json admin admin-password
+```
+
+Then use that admin username/password as the backend's `MQTT_USERNAME` and
+`MQTT_PASSWORD`.
+
+### Home ACL behavior
+
+When the frontend calls `POST /api/enroll/home`, the backend will:
+
+1. Generate a unique MQTT username/password for the home.
+2. Create a Dynamic Security role named from the user/home IDs.
+3. Allow that role to access only the home's topic subtree:
+   ```text
+   {user_id}/{home_id}/#
+   ```
+4. Create the MQTT client and bind the role to it.
+
+Device enrollment then reuses the stored home MQTT credentials.
+
 ## Run the Application
 
-1. Create necessary Mosquitto config files:
-   ```bash
-   mkdir -p mosquitto/config mosquitto/data mosquitto/log
-   ```
-2. Create a basic `mosquitto/config/mosquitto.conf`:
-   ```conf
-   listener 1883
-   allow_anonymous true
-   ```
-3. Run `docker-compose up -d`.
+Run the stack with:
+
+```bash
+docker-compose up -d
+```
 
 ## Cloud Integrations
 

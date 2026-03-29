@@ -6,10 +6,11 @@ import (
 	"fmt"
 	"log"
 	"strconv"
+	"strings"
 	"time"
 
-	"github.com/redis/go-redis/v9"
 	"github.com/iot-backend/internal/config"
+	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 )
 
@@ -36,11 +37,19 @@ type DeviceInfo struct {
 	ProductID uint `json:"product_id"`
 }
 
+type DevicePresence struct {
+	Online       bool      `json:"online"`
+	LastStatus   string    `json:"last_status"`
+	LastStatusAt time.Time `json:"last_status_at"`
+	LastSeenAt   time.Time `json:"last_seen_at"`
+}
+
 // --- key helpers ---
 
-func deviceStateKey(deviceID uint) string  { return fmt.Sprintf("device:%d", deviceID) }
-func deviceMetaKey(deviceID uint) string   { return fmt.Sprintf("device_meta:%d", deviceID) }
-func productCapsKey(productID uint) string { return fmt.Sprintf("product_caps:%d", productID) }
+func deviceStateKey(deviceID uint) string    { return fmt.Sprintf("device:%d", deviceID) }
+func deviceMetaKey(deviceID uint) string     { return fmt.Sprintf("device_meta:%d", deviceID) }
+func devicePresenceKey(deviceID uint) string { return fmt.Sprintf("device_presence:%d", deviceID) }
+func productCapsKey(productID uint) string   { return fmt.Sprintf("product_caps:%d", productID) }
 
 const deviceIDsSet = "device_ids"
 
@@ -181,6 +190,31 @@ func GetAllDevices() []DeviceInfo {
 		}
 	}
 	return devices
+}
+
+func SetDevicePresence(deviceID uint, status string) {
+	normalized := strings.ToLower(strings.TrimSpace(status))
+	now := time.Now().UTC()
+
+	presence := DevicePresence{
+		Online:       normalized == "online",
+		LastStatus:   normalized,
+		LastStatusAt: now,
+	}
+
+	if current, ok := GetDevicePresence(deviceID); ok {
+		presence.LastSeenAt = current.LastSeenAt
+	}
+	if presence.Online {
+		presence.LastSeenAt = now
+	}
+
+	cacheJSON(devicePresenceKey(deviceID), presence)
+}
+
+func GetDevicePresence(deviceID uint) (DevicePresence, bool) {
+	var presence DevicePresence
+	return presence, getJSON(devicePresenceKey(deviceID), &presence)
 }
 
 // ============================================================

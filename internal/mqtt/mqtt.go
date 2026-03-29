@@ -36,6 +36,18 @@ func InitMQTT(cfg *config.Config) {
 // Topic format: {user_id}/{home_id}/{device_id}/{component}/{esphome_key}/state
 var messagePubHandler pahomqtt.MessageHandler = func(client pahomqtt.Client, msg pahomqtt.Message) {
 	parts := strings.Split(msg.Topic(), "/")
+	if len(parts) == 4 && parts[3] == "status" {
+		deviceID, err := strconv.ParseUint(parts[2], 10, 64)
+		if err != nil {
+			return
+		}
+
+		payload := string(msg.Payload())
+		state.SetDevicePresence(uint(deviceID), payload)
+		log.Printf("MQTT: device %d status = %s", deviceID, payload)
+		return
+	}
+
 	if len(parts) < 6 {
 		return
 	}
@@ -53,9 +65,12 @@ var messagePubHandler pahomqtt.MessageHandler = func(client pahomqtt.Client, msg
 // connectHandler subscribes to state topics for all devices, reading entirely from Valkey.
 var connectHandler pahomqtt.OnConnectHandler = func(client pahomqtt.Client) {
 	log.Println("Connected to MQTT Broker")
+	subscribeDynsecResponses()
 
 	devices := state.GetAllDevices()
 	for _, d := range devices {
+		Subscribe(models.BuildStatusTopic(d.UserID, d.HomeID, d.ID))
+
 		caps, err := state.GetProductCaps(d.ProductID)
 		if err != nil {
 			log.Printf("Failed to get caps for product %d: %v", d.ProductID, err)
@@ -86,6 +101,8 @@ func Publish(topic string, payload interface{}) {
 
 // SubscribeDevice subscribes to all capability state topics for a single device.
 func SubscribeDevice(device models.Device) {
+	Subscribe(models.BuildStatusTopic(device.UserID, device.HomeID, device.ID))
+
 	caps, err := state.GetProductCaps(device.ProductID)
 	if err != nil {
 		log.Printf("Failed to get caps for product %d: %v", device.ProductID, err)

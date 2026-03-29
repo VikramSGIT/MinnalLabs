@@ -93,3 +93,7 @@ func (OAuthToken) TableName() string { return "oauth_tokens" }
 func BuildTopic(userID, homeID, deviceID uint, component, esphomeKey, action string) string {
 	return fmt.Sprintf("%d/%d/%d/%s/%s/%s", userID, homeID, deviceID, component, esphomeKey, action)
 }
+
+func BuildStatusTopic(userID, homeID, deviceID uint) string {
+	return fmt.Sprintf("%d/%d/%d/status", userID, homeID, deviceID)
+}

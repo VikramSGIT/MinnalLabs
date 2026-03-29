@@ -1,6 +1,6 @@
 import { getFrontendConfig } from "../lib/config.js";
 import { ApiError, postJSON, requestJSON } from "../lib/api.js";
-import "./device-enrollment.js";
+import "./home-device-manager.js";
 import "./home-create-form.js";
 import "./login-form.js";
 
@@ -47,7 +47,7 @@ class AppShell extends HTMLElement {
     const steps = [
       { label: "Login", status: user ? "complete" : "active" },
       { label: "Choose Home", status: user && !home ? "active" : home ? "complete" : "pending" },
-      { label: "Enroll Device", status: home ? "active" : "pending" },
+      { label: "Manage Devices", status: home ? "active" : "pending" },
     ];
 
     this.shadowRoot.innerHTML = `
@@ -230,7 +230,7 @@ class AppShell extends HTMLElement {
             <div>
               <h1>IoT Enrollment</h1>
               <p class="subtitle">
-                Sign in, choose or create a home with Wi-Fi and MQTT credentials, then provision a device over Web Bluetooth.
+                Sign in, choose or create a home with Wi-Fi and MQTT credentials, then manage devices and provision new ones over Web Bluetooth.
               </p>
             </div>
             <div class="actions">
@@ -326,11 +326,11 @@ class AppShell extends HTMLElement {
       return;
     }
 
-    const deviceEnrollment = document.createElement("device-enrollment");
-    deviceEnrollment.apiBaseUrl = this.config.apiBaseUrl;
-    deviceEnrollment.user = this.state.user;
-    deviceEnrollment.home = this.state.home;
-    stage.append(deviceEnrollment);
+    const homeDeviceManager = document.createElement("home-device-manager");
+    homeDeviceManager.apiBaseUrl = this.config.apiBaseUrl;
+    homeDeviceManager.user = this.state.user;
+    homeDeviceManager.home = this.state.home;
+    stage.append(homeDeviceManager);
   }
 
   async bootstrapSession() {
