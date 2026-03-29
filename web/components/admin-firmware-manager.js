@@ -218,6 +218,7 @@ class AdminFirmwareManager extends HTMLElement {
               <input id="firmwareFile" type="file" accept=".bin" required>
             </label>
           </div>
+          <p class="hint">Upload the ESPHome OTA binary (`*.ota.bin`). Factory binaries (`*.factory.bin`) are rejected because HTTP OTA cannot install them.</p>
           <div class="button-row">
             <button id="uploadBtn" type="submit" ${this.isLoading ? "disabled" : ""}>${this.isUploading ? "Uploading..." : "Upload Firmware"}</button>
           </div>
@@ -330,6 +331,12 @@ class AdminFirmwareManager extends HTMLElement {
     const version = this.versionInput?.value.trim() || "";
     if (!file) {
       this.errorMessage = "Choose a firmware file to upload.";
+      this.successMessage = "";
+      this.render();
+      return;
+    }
+    if (String(file.name || "").toLowerCase().endsWith(".factory.bin")) {
+      this.errorMessage = "Upload the ESPHome OTA binary (*.ota.bin), not the factory binary (*.factory.bin).";
       this.successMessage = "";
       this.render();
       return;

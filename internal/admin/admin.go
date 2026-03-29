@@ -115,6 +115,17 @@ func normalizeBatchIntervalMinutes(value int, unit string) (int, error) {
 	}
 }
 
+func validateFirmwareUploadName(filename string) error {
+	lowerName := strings.ToLower(strings.TrimSpace(filename))
+	if lowerName == "" {
+		return fmt.Errorf("firmware file name is required")
+	}
+	if strings.HasSuffix(lowerName, ".factory.bin") {
+		return fmt.Errorf("upload the ESPHome OTA binary (*.ota.bin), not the factory binary (*.factory.bin)")
+	}
+	return nil
+}
+
 func fileMD5(path string) (string, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -144,6 +155,10 @@ func uploadFirmware(c *gin.Context) {
 	fileHeader, err := c.FormFile("file")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "firmware file is required"})
+		return
+	}
+	if err := validateFirmwareUploadName(fileHeader.Filename); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
