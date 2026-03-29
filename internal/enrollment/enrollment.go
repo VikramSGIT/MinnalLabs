@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/iot-backend/internal/config"
@@ -122,13 +123,27 @@ func listHomes(c *gin.Context) {
 }
 
 func firmwareState(device models.Device, presence state.DevicePresence, presenceFound bool) (string, string, bool) {
-	current := ""
-	if presenceFound {
-		current = presence.FirmwareVersion
+	current := strings.TrimSpace(device.FirmwareVersion)
+	if presenceFound && strings.TrimSpace(presence.FirmwareVersion) != "" {
+		current = strings.TrimSpace(presence.FirmwareVersion)
 	}
-	target := device.Product.FirmwareVersion
+	target := strings.TrimSpace(device.Product.FirmwareVersion)
 	updateAvailable := current != "" && target != "" && current != target
 	return current, target, updateAvailable
+}
+
+func firmwareMD5URL(product models.Product) string {
+	if strings.TrimSpace(product.FirmwareMD5URL) != "" {
+		return strings.TrimSpace(product.FirmwareMD5URL)
+	}
+	if strings.TrimSpace(product.FirmwareURL) == "" {
+		return ""
+	}
+	return strings.TrimSpace(product.FirmwareURL) + ".md5"
+}
+
+func firmwareURL(product models.Product) string {
+	return strings.TrimSpace(product.FirmwareURL)
 }
 
 func listHomeDevices(c *gin.Context) {
@@ -167,15 +182,16 @@ func listHomeDevices(c *gin.Context) {
 
 	response := make([]gin.H, 0, len(devices))
 	for _, device := range devices {
+		currentFirmware, targetFirmware, updateAvailable := firmwareState(device, state.DevicePresence{}, false)
 		item := gin.H{
 			"device_id":               device.ID,
 			"name":                    device.Name,
 			"product_id":              device.ProductID,
 			"mqtt_connected":          false,
 			"mqtt_status":             "unknown",
-			"firmware_version":        "",
-			"target_firmware_version": device.Product.FirmwareVersion,
-			"update_available":        false,
+			"firmware_version":        currentFirmware,
+			"target_firmware_version": targetFirmware,
+			"update_available":        updateAvailable,
 			"rollout_state":           "",
 			"rollout_batch_number":    0,
 			"rollout_id":              0,
@@ -185,7 +201,7 @@ func listHomeDevices(c *gin.Context) {
 		if presence, found := state.GetDevicePresence(device.ID); found {
 			item["mqtt_connected"] = presence.Online
 			item["mqtt_status"] = presence.LastStatus
-			currentFirmware, targetFirmware, updateAvailable := firmwareState(device, presence, true)
+			currentFirmware, targetFirmware, updateAvailable = firmwareState(device, presence, true)
 			item["firmware_version"] = currentFirmware
 			item["target_firmware_version"] = targetFirmware
 			item["update_available"] = updateAvailable
@@ -226,7 +242,7 @@ func getDeviceStatus(c *gin.Context) {
 	deviceID := uint(deviceIDValue)
 
 	var device models.Device
-	if err := db.DB.Preload("Product").Select("id, user_id, product_id").First(&device, deviceID).Error; err != nil {
+	if err := db.DB.Preload("Product").Select("id, user_id, product_id, firmware_version").First(&device, deviceID).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "device not found"})
 		return
 	}
@@ -237,13 +253,14 @@ func getDeviceStatus(c *gin.Context) {
 
 	presence, found := state.GetDevicePresence(deviceID)
 	if !found {
+		currentFirmware, targetFirmware, updateAvailable := firmwareState(device, state.DevicePresence{}, false)
 		c.JSON(http.StatusOK, gin.H{
 			"device_id":               deviceID,
 			"mqtt_connected":          false,
 			"mqtt_status":             "unknown",
-			"firmware_version":        "",
-			"target_firmware_version": device.Product.FirmwareVersion,
-			"update_available":        false,
+			"firmware_version":        currentFirmware,
+			"target_firmware_version": targetFirmware,
+			"update_available":        updateAvailable,
 			"rollout_state":           "",
 			"rollout_batch_number":    0,
 			"rollout_id":              0,
@@ -299,12 +316,18 @@ func triggerDeviceUpdate(c *gin.Context) {
 		c.JSON(http.StatusForbidden, gin.H{"error": "device does not belong to user"})
 		return
 	}
-	if device.Product.FirmwareVersion == "" || device.Product.FirmwareFilename == "" || device.Product.FirmwareMD5 == "" {
+	md5URL := firmwareMD5URL(device.Product)
+	otaURL := firmwareURL(device.Product)
+	if device.Product.FirmwareVersion == "" || otaURL == "" || md5URL == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "no firmware uploaded for this product"})
 		return
 	}
 
-	if presence, found := state.GetDevicePresence(device.ID); found && presence.FirmwareVersion != "" && presence.FirmwareVersion == device.Product.FirmwareVersion {
+	currentFirmware, _, _ := firmwareState(device, state.DevicePresence{}, false)
+	if presence, found := state.GetDevicePresence(device.ID); found {
+		currentFirmware, _, _ = firmwareState(device, presence, true)
+	}
+	if currentFirmware != "" && currentFirmware == device.Product.FirmwareVersion {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "device already has the latest firmware"})
 		return
 	}
@@ -312,8 +335,8 @@ func triggerDeviceUpdate(c *gin.Context) {
 	if err := mqtt.PublishDeviceFirmwareUpdateNow(
 		device,
 		device.Product.FirmwareVersion,
-		cfg.FirmwareFileURL(device.Product.FirmwareFilename),
-		device.Product.FirmwareMD5,
+		otaURL,
+		md5URL,
 	); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -324,7 +347,8 @@ func triggerDeviceUpdate(c *gin.Context) {
 		"device_id":        device.ID,
 		"product_id":       device.ProductID,
 		"firmware_version": device.Product.FirmwareVersion,
-		"firmware_url":     cfg.FirmwareFileURL(device.Product.FirmwareFilename),
+		"firmware_url":     otaURL,
+		"firmware_md5_url": md5URL,
 		"queued":           true,
 	})
 }

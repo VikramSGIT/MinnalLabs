@@ -20,6 +20,27 @@ function formatTimestamp(value) {
   return timestamp.toLocaleString();
 }
 
+function rolloutFormDefaults(product) {
+  const percentageValue = Number.parseInt(product?.rollout_percentage ?? "0", 10);
+  const percentage = percentageValue >= 1 && percentageValue <= 100 ? percentageValue : 20;
+
+  const minutesValue = Number.parseInt(product?.rollout_interval_minutes ?? "0", 10);
+  const minutes = minutesValue > 0 ? minutesValue : 60;
+  if (minutes % (24 * 60) === 0) {
+    return {
+      percentage,
+      intervalValue: Math.max(1, minutes / (24 * 60)),
+      intervalUnit: "days",
+    };
+  }
+
+  return {
+    percentage,
+    intervalValue: Math.max(1, Math.round(minutes / 60)),
+    intervalUnit: "hours",
+  };
+}
+
 class AdminFirmwareManager extends HTMLElement {
   constructor() {
     super();
@@ -43,6 +64,7 @@ class AdminFirmwareManager extends HTMLElement {
 
   render() {
     const currentProduct = this.products.find((entry) => String(entry.product_id) === String(this.selectedProductId));
+    const rolloutDefaults = rolloutFormDefaults(currentProduct);
     const rolloutsMarkup =
       this.rollouts.length === 0
         ? '<div class="meta">No rollouts created for this product yet.</div>'
@@ -150,7 +172,7 @@ class AdminFirmwareManager extends HTMLElement {
       <section class="panel">
         <div>
           <h2>Firmware Admin</h2>
-          <p class="hint">Upload firmware binaries, then create a staged retained per-device rollout using batch percentages and interval spacing.</p>
+          <p class="hint">Upload firmware binaries, then create a staged retained per-device rollout using the saved product batch percentage and interval settings shown below.</p>
         </div>
         <div class="grid">
           <div class="meta">
@@ -205,17 +227,17 @@ class AdminFirmwareManager extends HTMLElement {
           <div class="grid">
             <label>
               Batch Percentage
-              <input id="batchPercentage" type="number" min="1" max="100" step="1" value="20" required>
+              <input id="batchPercentage" type="number" min="1" max="100" step="1" value="${escapeHtml(String(rolloutDefaults.percentage))}" required>
             </label>
             <label>
               Interval Value
-              <input id="batchIntervalValue" type="number" min="1" step="1" value="1" required>
+              <input id="batchIntervalValue" type="number" min="1" step="1" value="${escapeHtml(String(rolloutDefaults.intervalValue))}" required>
             </label>
             <label>
               Interval Unit
               <select id="batchIntervalUnit">
-                <option value="hours">Hours</option>
-                <option value="days">Days</option>
+                <option value="hours" ${rolloutDefaults.intervalUnit === "hours" ? "selected" : ""}>Hours</option>
+                <option value="days" ${rolloutDefaults.intervalUnit === "days" ? "selected" : ""}>Days</option>
               </select>
             </label>
           </div>
@@ -323,7 +345,7 @@ class AdminFirmwareManager extends HTMLElement {
       formData.append("file", file);
 
       const response = await postFormData(`/api/admin/products/${encodeURIComponent(this.selectedProductId)}/firmware`, formData, this.apiBaseUrl);
-      this.successMessage = `Uploaded ${response.firmware_filename} and set product ${response.product_id} to ${response.firmware_version}.`;
+      this.successMessage = `Updated product ${response.product_id} to ${response.firmware_version}.`;
       this.fileInput.value = "";
       await this.loadProducts();
     } catch (error) {

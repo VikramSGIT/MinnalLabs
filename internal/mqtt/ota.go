@@ -13,7 +13,7 @@ type OTACommand struct {
 	ProductID   uint   `json:"product_id"`
 	Version     string `json:"version"`
 	URL         string `json:"url"`
-	MD5         string `json:"md5"`
+	MD5URL      string `json:"md5_url"`
 	RolloutID   uint   `json:"rollout_id,omitempty"`
 	BatchNumber int    `json:"batch_number,omitempty"`
 	IssuedAt    string `json:"issued_at"`
@@ -33,12 +33,12 @@ func publishJSON(topic string, payload interface{}, retain bool) error {
 	return nil
 }
 
-func PublishRetainedDeviceFirmwareUpdate(device models.Device, version, url, md5 string, rolloutID uint, batchNumber int) error {
+func PublishRetainedDeviceFirmwareUpdate(device models.Device, version, url, md5URL string, rolloutID uint, batchNumber int) error {
 	payload := OTACommand{
 		ProductID:   device.ProductID,
 		Version:     version,
 		URL:         url,
-		MD5:         md5,
+		MD5URL:      md5URL,
 		RolloutID:   rolloutID,
 		BatchNumber: batchNumber,
 		IssuedAt:    time.Now().UTC().Format(time.RFC3339),
@@ -59,6 +59,6 @@ func ClearRetainedDeviceFirmwareUpdate(device models.Device) error {
 	return nil
 }
 
-func PublishDeviceFirmwareUpdateNow(device models.Device, version, url, md5 string) error {
-	return PublishRetainedDeviceFirmwareUpdate(device, version, url, md5, 0, 0)
+func PublishDeviceFirmwareUpdateNow(device models.Device, version, url, md5URL string) error {
+	return PublishRetainedDeviceFirmwareUpdate(device, version, url, md5URL, 0, 0)
 }

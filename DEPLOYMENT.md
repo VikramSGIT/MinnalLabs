@@ -85,18 +85,20 @@ Device presence is tracked with retained MQTT LWT status messages on:
 Each device publishes `online_v1.0.1` (including its current firmware version)
 as its retained birth message and `offline` as its retained will/shutdown
 message. The backend subscribes to those status topics and mirrors the latest
-value into Valkey so the enrollment APIs can return device status and firmware
-version quickly without querying the broker on every request.
+value into Valkey while also persisting the latest reported firmware version on
+the device row in PostgreSQL. This lets the enrollment APIs keep returning the
+last known firmware version even after a backend restart or empty Valkey cache.
 
 ### Firmware rollout channels
 
 Firmware rollout messages are published per device:
 
 ```text
-{user_id}/{home_id}/{device_id}/ota/command
+{user_id}/{home_id}/{device_id}/firmware_update
 ```
 
-The backend rollout worker sends these OTA commands as **retained** messages:
+The backend rollout worker sends these OTA commands as **retained** JSON
+messages containing `version`, `url`, and `md5_url`:
 
 1. Each batch publishes one retained OTA command per selected device.
 2. If a device is offline, it receives the retained command when it reconnects.
@@ -119,6 +121,13 @@ Example:
 
 ```text
 http://localhost:8081/firmware/1_v1.0.2.bin
+```
+
+Each uploaded binary also gets a companion MD5 text file served from the same
+location with a `.md5` suffix, for example:
+
+```text
+http://localhost:8081/firmware/1_v1.0.2.bin.md5
 ```
 
 Set this in the backend environment if you are exposing Caddy on a different

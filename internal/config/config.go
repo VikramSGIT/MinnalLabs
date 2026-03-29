@@ -190,3 +190,7 @@ func (c *Config) FirmwareFileURL(filename string) string {
 	}
 	return base + "/" + url.PathEscape(filename)
 }
+
+func (c *Config) FirmwareMD5URL(filename string) string {
+	return c.FirmwareFileURL(filename + ".md5")
+}

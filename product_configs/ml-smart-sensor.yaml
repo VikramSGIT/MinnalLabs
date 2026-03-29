@@ -66,6 +66,14 @@ esphome:
             - wifi.disable:
             - mqtt.disable:
             - script.execute: blink_enrollment_led
+      - if:
+          condition:
+            lambda: 'return id(g_ota_target_version).length() > 0 && id(g_ota_target_version) == "${firmware_version}";'
+          then:
+            - logger.log:
+                format: "Running target firmware %s. Clearing persisted OTA retry state."
+                args: ['id(g_ota_target_version).c_str()']
+            - script.execute: clear_pending_ota
 
 esp32:
   board: esp32-c6-devkitc-1
@@ -122,37 +130,33 @@ globals:
     initial_value: '""'
   - id: g_ota_url
     type: std::string
-    restore_value: no
+    restore_value: yes
+    max_restore_data_length: 255
     initial_value: '""'
-  - id: g_ota_md5
+  - id: g_ota_md5_url
     type: std::string
-    restore_value: no
+    restore_value: yes
+    max_restore_data_length: 255
     initial_value: '""'
-  - id: g_ota_version
+  - id: g_ota_target_version
     type: std::string
-    restore_value: no
+    restore_value: yes
+    max_restore_data_length: 64
     initial_value: '""'
-  - id: g_ota_pending
-    type: bool
-    restore_value: no
-    initial_value: 'false'
-  - id: g_ota_topic_subscribed
-    type: bool
-    restore_value: no
-    initial_value: 'false'
 
 mqtt:
   id: my_mqtt
   broker: ""
   on_connect:
     - lambda: |-
-        if (id(g_ota_topic_subscribed)) {
+        static bool ota_topic_registered = false;
+        if (ota_topic_registered) {
           return;
         }
-        std::string ota_topic = id(g_user_id) + "/" + id(g_home_id) + "/" + id(g_device_id) + "/ota/command";
+        std::string ota_topic = id(g_user_id) + "/" + id(g_home_id) + "/" + id(g_device_id) + "/firmware_update";
         id(my_mqtt).subscribe_json(ota_topic, [=](const std::string &topic, JsonObject root) {
-          if (!root.containsKey("version") || !root.containsKey("url") || !root.containsKey("md5")) {
-            ESP_LOGW("ota", "Ignoring OTA command missing version/url/md5");
+          if (!root.containsKey("version") || !root.containsKey("url") || !root.containsKey("md5_url")) {
+            ESP_LOGW("ota", "Ignoring OTA command missing version/url/md5_url");
             return;
           }
 
@@ -162,24 +166,46 @@ mqtt:
             return;
           }
 
-          id(g_ota_version) = target_version;
+          id(g_ota_target_version) = target_version;
           id(g_ota_url) = std::string(root["url"].as<const char *>());
-          id(g_ota_md5) = std::string(root["md5"].as<const char *>());
-          id(g_ota_pending) = true;
+          id(g_ota_md5_url) = std::string(root["md5_url"].as<const char *>());
+          global_preferences->sync();
 
-          ESP_LOGI("ota", "Queued OTA version %s from %s", id(g_ota_version).c_str(), id(g_ota_url).c_str());
+          ESP_LOGI("ota", "Queued OTA version %s from %s", id(g_ota_target_version).c_str(), id(g_ota_url).c_str());
           id(run_pending_ota).execute();
         });
-        id(g_ota_topic_subscribed) = true;
+        ota_topic_registered = true;
         ESP_LOGI("ota", "Subscribed to OTA topic %s", ota_topic.c_str());
-  on_disconnect:
-    - lambda: |-
-        id(g_ota_topic_subscribed) = false;
 
 http_request:
 
 ota:
   - platform: http_request
+    on_error:
+      then:
+        - logger.log:
+            format: "OTA update error %d. Retrying in 1 minute."
+            args: ["x"]
+        - script.execute: retry_pending_ota
+
+safe_mode:
+  on_safe_mode:
+    then:
+      - if:
+          condition:
+            lambda: |-
+              return id(g_ota_url).length() > 0 &&
+                     id(g_ota_md5_url).length() > 0 &&
+                     id(g_ota_target_version).length() > 0 &&
+                     id(g_ota_target_version) != "${firmware_version}";
+          then:
+            - logger.log:
+                format: "Safe mode entered with pending OTA target %s. Retrying in 1 minute."
+                args: ['id(g_ota_target_version).c_str()']
+            - delay: 1min
+            - ota.http_request.flash:
+                url: !lambda 'return id(g_ota_url);'
+                md5_url: !lambda 'return id(g_ota_md5_url);'
 
 esp32_ble_server:
   on_connect:
@@ -339,14 +365,38 @@ script:
     then:
       - if:
           condition:
-            lambda: 'return id(g_ota_pending) && id(g_ota_url).length() > 0 && id(g_ota_md5).length() > 0;'
+            lambda: |-
+              return id(g_ota_url).length() > 0 &&
+                     id(g_ota_md5_url).length() > 0 &&
+                     id(g_ota_target_version).length() > 0 &&
+                     id(g_ota_target_version) != "${firmware_version}";
           then:
             - logger.log:
                 format: "Applying OTA version %s from %s"
-                args: ['id(g_ota_version).c_str()', 'id(g_ota_url).c_str()']
+                args: ['id(g_ota_target_version).c_str()', 'id(g_ota_url).c_str()']
             - ota.http_request.flash:
                 url: !lambda 'return id(g_ota_url);'
-                md5: !lambda 'return id(g_ota_md5);'
+                md5_url: !lambda 'return id(g_ota_md5_url);'
+  - id: retry_pending_ota
+    mode: restart
+    then:
+      - if:
+          condition:
+            lambda: |-
+              return id(g_ota_url).length() > 0 &&
+                     id(g_ota_md5_url).length() > 0 &&
+                     id(g_ota_target_version).length() > 0 &&
+                     id(g_ota_target_version) != "${firmware_version}";
+          then:
+            - delay: 1min
+            - script.execute: run_pending_ota
+  - id: clear_pending_ota
+    mode: restart
+    then:
+      - globals.set: { id: g_ota_url, value: '""' }
+      - globals.set: { id: g_ota_md5_url, value: '""' }
+      - globals.set: { id: g_ota_target_version, value: '""' }
+      - lambda: 'global_preferences->sync();'
   - id: do_factory_reset
     then:
       - logger.log: "Factory reset triggered! Clearing all provisioning data..."
@@ -359,11 +409,7 @@ script:
       - globals.set: { id: g_mqtt_port, value: '"1883"' }
       - globals.set: { id: g_wifi_ssid, value: '""' }
       - globals.set: { id: g_wifi_password, value: '""' }
-      - globals.set: { id: g_ota_url, value: '""' }
-      - globals.set: { id: g_ota_md5, value: '""' }
-      - globals.set: { id: g_ota_version, value: '""' }
-      - globals.set: { id: g_ota_pending, value: 'false' }
-      - globals.set: { id: g_ota_topic_subscribed, value: 'false' }
+      - script.execute: clear_pending_ota
       - lambda: 'global_preferences->sync();'
       - delay: 1s
       - button.press: restart_device

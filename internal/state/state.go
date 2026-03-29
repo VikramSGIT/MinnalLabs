@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/iot-backend/internal/config"
+	"github.com/iot-backend/internal/models"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 )
@@ -213,6 +214,32 @@ func RemoveDevices(deviceIDs []uint) {
 	}
 }
 
+func syncDeviceFirmwareVersion(deviceID uint, version string) {
+	if gdb == nil {
+		return
+	}
+
+	version = strings.TrimSpace(version)
+	if version == "" {
+		return
+	}
+
+	var device models.Device
+	if err := gdb.Select("id, firmware_version").First(&device, deviceID).Error; err != nil {
+		log.Printf("Error loading device %d firmware version: %v", deviceID, err)
+		return
+	}
+	if strings.TrimSpace(device.FirmwareVersion) == version {
+		return
+	}
+
+	if err := gdb.Model(&models.Device{}).
+		Where("id = ?", deviceID).
+		Update("firmware_version", version).Error; err != nil {
+		log.Printf("Error updating device %d firmware version: %v", deviceID, err)
+	}
+}
+
 func SetDevicePresence(deviceID uint, status string) {
 	raw := strings.TrimSpace(status)
 	normalized := strings.ToLower(raw)
@@ -229,7 +256,11 @@ func SetDevicePresence(deviceID uint, status string) {
 		presence.FirmwareVersion = current.FirmwareVersion
 	}
 	if strings.HasPrefix(normalized, "online_") && len(raw) > len("online_") {
-		presence.FirmwareVersion = strings.TrimSpace(raw[len("online_"):])
+		reportedVersion := strings.TrimSpace(raw[len("online_"):])
+		if reportedVersion != presence.FirmwareVersion {
+			syncDeviceFirmwareVersion(deviceID, reportedVersion)
+		}
+		presence.FirmwareVersion = reportedVersion
 	}
 	if presence.Online {
 		presence.LastSeenAt = now

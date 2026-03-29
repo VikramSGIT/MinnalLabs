@@ -67,6 +67,42 @@ type deviceWithSort struct {
 	SortKey string
 }
 
+func effectiveRolloutPercentage(product models.Product) int {
+	if product.RolloutPercentage >= 1 && product.RolloutPercentage <= 100 {
+		return product.RolloutPercentage
+	}
+	return 20
+}
+
+func effectiveRolloutIntervalMinutes(product models.Product) int {
+	if product.RolloutIntervalMinutes > 0 {
+		return product.RolloutIntervalMinutes
+	}
+	return 60
+}
+
+func currentDeviceFirmwareVersion(device models.Device) string {
+	current := strings.TrimSpace(device.FirmwareVersion)
+	if presence, found := state.GetDevicePresence(device.ID); found && strings.TrimSpace(presence.FirmwareVersion) != "" {
+		current = strings.TrimSpace(presence.FirmwareVersion)
+	}
+	return current
+}
+
+func currentProductMD5URL(product models.Product) string {
+	if strings.TrimSpace(product.FirmwareMD5URL) != "" {
+		return strings.TrimSpace(product.FirmwareMD5URL)
+	}
+	if strings.TrimSpace(product.FirmwareURL) == "" {
+		return ""
+	}
+	return strings.TrimSpace(product.FirmwareURL) + ".md5"
+}
+
+func currentProductFirmwareURL(product models.Product) string {
+	return strings.TrimSpace(product.FirmwareURL)
+}
+
 func StartWorker(cfg *config.Config) {
 	appCfg = cfg
 	mqtt.RegisterStatusUpdateHook(HandleDeviceStatusUpdate)
@@ -159,10 +195,12 @@ func cancelActiveRolloutsForProduct(productID uint) error {
 	return nil
 }
 
-func CreateRollout(product models.Product, createdBy uint, batchPercentage, batchIntervalMinutes int) (*models.FirmwareRollout, int, int, error) {
-	if product.ID == 0 || product.FirmwareVersion == "" || product.FirmwareFilename == "" || product.FirmwareMD5 == "" {
+func CreateRollout(product models.Product, createdBy uint) (*models.FirmwareRollout, int, int, error) {
+	if product.ID == 0 || product.FirmwareVersion == "" || currentProductFirmwareURL(product) == "" || currentProductMD5URL(product) == "" {
 		return nil, 0, 0, fmt.Errorf("product firmware is incomplete")
 	}
+	batchPercentage := effectiveRolloutPercentage(product)
+	batchIntervalMinutes := effectiveRolloutIntervalMinutes(product)
 	if batchPercentage < 1 || batchPercentage > 100 {
 		return nil, 0, 0, fmt.Errorf("batch_percentage must be between 1 and 100")
 	}
@@ -172,7 +210,7 @@ func CreateRollout(product models.Product, createdBy uint, batchPercentage, batc
 
 	var devices []models.Device
 	if err := db.DB.
-		Select("id, user_id, home_id, product_id").
+		Select("id, user_id, home_id, product_id, firmware_version").
 		Where("product_id = ? AND deleted_at IS NULL", product.ID).
 		Find(&devices).Error; err != nil {
 		return nil, 0, 0, fmt.Errorf("load rollout devices: %w", err)
@@ -180,8 +218,7 @@ func CreateRollout(product models.Product, createdBy uint, batchPercentage, batc
 
 	eligible := make([]models.Device, 0, len(devices))
 	for _, device := range devices {
-		presence, found := state.GetDevicePresence(device.ID)
-		if found && presence.FirmwareVersion != "" && presence.FirmwareVersion == product.FirmwareVersion {
+		if currentDeviceFirmwareVersion(device) == product.FirmwareVersion {
 			continue
 		}
 		eligible = append(eligible, device)
@@ -198,8 +235,6 @@ func CreateRollout(product models.Product, createdBy uint, batchPercentage, batc
 	rollout := &models.FirmwareRollout{
 		ProductID:            product.ID,
 		TargetVersion:        product.FirmwareVersion,
-		FirmwareFilename:     product.FirmwareFilename,
-		FirmwareMD5:          product.FirmwareMD5,
 		BatchPercentage:      batchPercentage,
 		BatchIntervalMinutes: batchIntervalMinutes,
 		Status:               rolloutStatusPending,
@@ -360,13 +395,14 @@ func processDueRollouts() {
 
 func dispatchNextBatch(rollout models.FirmwareRollout) error {
 	type target struct {
-		RolloutID   uint   `gorm:"column:rollout_id"`
-		DeviceID    uint   `gorm:"column:device_id"`
-		BatchNumber int    `gorm:"column:batch_number"`
-		UserID      uint   `gorm:"column:user_id"`
-		HomeID      uint   `gorm:"column:home_id"`
-		ProductID   uint   `gorm:"column:product_id"`
-		TargetState string `gorm:"column:state"`
+		RolloutID       uint   `gorm:"column:rollout_id"`
+		DeviceID        uint   `gorm:"column:device_id"`
+		BatchNumber     int    `gorm:"column:batch_number"`
+		UserID          uint   `gorm:"column:user_id"`
+		HomeID          uint   `gorm:"column:home_id"`
+		ProductID       uint   `gorm:"column:product_id"`
+		FirmwareVersion string `gorm:"column:firmware_version"`
+		TargetState     string `gorm:"column:state"`
 	}
 
 	var nextPending models.FirmwareRolloutDevice
@@ -380,7 +416,7 @@ func dispatchNextBatch(rollout models.FirmwareRollout) error {
 
 	var targets []target
 	if err := db.DB.Raw(`
-		SELECT frd.rollout_id, frd.device_id, frd.batch_number, frd.state, d.user_id, d.home_id, d.product_id
+		SELECT frd.rollout_id, frd.device_id, frd.batch_number, frd.state, d.user_id, d.home_id, d.product_id, d.firmware_version
 		FROM firmware_rollout_devices frd
 		JOIN devices d ON d.id = frd.device_id
 		WHERE frd.rollout_id = ? AND frd.batch_number = ? AND frd.state = ?
@@ -388,17 +424,34 @@ func dispatchNextBatch(rollout models.FirmwareRollout) error {
 	`, rollout.ID, nextPending.BatchNumber, rolloutDevicePending).Scan(&targets).Error; err != nil {
 		return err
 	}
+	if appCfg == nil {
+		return fmt.Errorf("ota worker config not initialized")
+	}
+
+	var product models.Product
+	if err := db.DB.Select("id, firmware_url, firmware_md5_url").
+		First(&product, rollout.ProductID).Error; err != nil {
+		return fmt.Errorf("load rollout product: %w", err)
+	}
+	firmwareURL := currentProductFirmwareURL(product)
+	md5URL := currentProductMD5URL(product)
+	if firmwareURL == "" || md5URL == "" {
+		return fmt.Errorf("product firmware is incomplete")
+	}
 
 	now := time.Now().UTC()
 	for _, target := range targets {
-		presence, found := state.GetDevicePresence(target.DeviceID)
-		if found && presence.FirmwareVersion != "" && presence.FirmwareVersion == rollout.TargetVersion {
+		currentVersion := strings.TrimSpace(target.FirmwareVersion)
+		if presence, found := state.GetDevicePresence(target.DeviceID); found && strings.TrimSpace(presence.FirmwareVersion) != "" {
+			currentVersion = strings.TrimSpace(presence.FirmwareVersion)
+		}
+		if currentVersion != "" && currentVersion == rollout.TargetVersion {
 			if err := db.DB.Model(&models.FirmwareRolloutDevice{}).
 				Where("rollout_id = ? AND device_id = ?", rollout.ID, target.DeviceID).
 				Updates(map[string]interface{}{
 					"state":                 rolloutDeviceUpdated,
 					"updated_at":            now,
-					"last_reported_version": presence.FirmwareVersion,
+					"last_reported_version": currentVersion,
 				}).Error; err != nil {
 				return err
 			}
@@ -411,14 +464,11 @@ func dispatchNextBatch(rollout models.FirmwareRollout) error {
 			HomeID:    target.HomeID,
 			ProductID: target.ProductID,
 		}
-		if appCfg == nil {
-			return fmt.Errorf("ota worker config not initialized")
-		}
 		if err := mqtt.PublishRetainedDeviceFirmwareUpdate(
 			device,
 			rollout.TargetVersion,
-			appCfg.FirmwareFileURL(rollout.FirmwareFilename),
-			rollout.FirmwareMD5,
+			firmwareURL,
+			md5URL,
 			rollout.ID,
 			target.BatchNumber,
 		); err != nil {

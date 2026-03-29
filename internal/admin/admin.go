@@ -48,14 +48,13 @@ func listProducts(c *gin.Context) {
 	response := make([]gin.H, 0, len(products))
 	for _, product := range products {
 		item := gin.H{
-			"product_id":        product.ID,
-			"name":              product.Name,
-			"firmware_version":  product.FirmwareVersion,
-			"firmware_filename": product.FirmwareFilename,
-			"firmware_md5":      product.FirmwareMD5,
-		}
-		if product.FirmwareFilename != "" {
-			item["firmware_url"] = cfg.FirmwareFileURL(product.FirmwareFilename)
+			"product_id":               product.ID,
+			"name":                     product.Name,
+			"firmware_version":         product.FirmwareVersion,
+			"firmware_url":             effectiveFirmwareURL(product),
+			"firmware_md5_url":         effectiveFirmwareMD5URL(product),
+			"rollout_percentage":       effectiveRolloutPercentage(product),
+			"rollout_interval_minutes": effectiveRolloutIntervalMinutes(product),
 		}
 		if product.FirmwareUploadedAt != nil {
 			item["firmware_uploaded_at"] = product.FirmwareUploadedAt
@@ -81,6 +80,53 @@ func sanitizeVersion(version string) string {
 
 func buildFirmwareFilename(productID uint, version string) string {
 	return fmt.Sprintf("%d_%s.bin", productID, version)
+}
+
+func buildFirmwareMD5Filename(filename string) string {
+	return filename + ".md5"
+}
+
+func effectiveRolloutPercentage(product models.Product) int {
+	if product.RolloutPercentage >= 1 && product.RolloutPercentage <= 100 {
+		return product.RolloutPercentage
+	}
+	return 20
+}
+
+func effectiveRolloutIntervalMinutes(product models.Product) int {
+	if product.RolloutIntervalMinutes > 0 {
+		return product.RolloutIntervalMinutes
+	}
+	return 60
+}
+
+func effectiveFirmwareURL(product models.Product) string {
+	return strings.TrimSpace(product.FirmwareURL)
+}
+
+func effectiveFirmwareMD5URL(product models.Product) string {
+	if strings.TrimSpace(product.FirmwareMD5URL) != "" {
+		return strings.TrimSpace(product.FirmwareMD5URL)
+	}
+	if strings.TrimSpace(product.FirmwareURL) == "" {
+		return ""
+	}
+	return strings.TrimSpace(product.FirmwareURL) + ".md5"
+}
+
+func normalizeBatchIntervalMinutes(value int, unit string) (int, error) {
+	if value < 1 {
+		return 0, fmt.Errorf("batch_interval_value must be at least 1")
+	}
+
+	switch strings.ToLower(strings.TrimSpace(unit)) {
+	case "hour", "hours":
+		return value * 60, nil
+	case "day", "days":
+		return value * 24 * 60, nil
+	default:
+		return 0, fmt.Errorf("batch_interval_unit must be hours or days")
+	}
 }
 
 func fileMD5(path string) (string, error) {
@@ -139,11 +185,21 @@ func uploadFirmware(c *gin.Context) {
 		return
 	}
 
+	md5Filename := buildFirmwareMD5Filename(filename)
+	md5Path := filepath.Join(cfg.FirmwareStoragePath(), md5Filename)
+	if err := os.WriteFile(md5Path, []byte(md5sum), 0o644); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to write firmware md5 file"})
+		return
+	}
+
+	firmwareURL := cfg.FirmwareFileURL(filename)
+	md5URL := cfg.FirmwareMD5URL(filename)
+
 	now := time.Now().UTC()
 	if err := db.DB.Model(&product).Updates(map[string]interface{}{
 		"firmware_version":     version,
-		"firmware_filename":    filename,
-		"firmware_md5":         md5sum,
+		"firmware_url":         firmwareURL,
+		"firmware_md5_url":     md5URL,
 		"firmware_uploaded_at": now,
 	}).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to persist firmware metadata"})
@@ -154,9 +210,8 @@ func uploadFirmware(c *gin.Context) {
 		"product_id":           product.ID,
 		"name":                 product.Name,
 		"firmware_version":     version,
-		"firmware_filename":    filename,
-		"firmware_md5":         md5sum,
-		"firmware_url":         cfg.FirmwareFileURL(filename),
+		"firmware_url":         firmwareURL,
+		"firmware_md5_url":     md5URL,
 		"firmware_uploaded_at": now,
 	})
 }
@@ -203,7 +258,7 @@ func rolloutFirmware(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "product not found"})
 		return
 	}
-	if product.FirmwareFilename == "" || product.FirmwareVersion == "" || product.FirmwareMD5 == "" {
+	if effectiveFirmwareURL(product) == "" || product.FirmwareVersion == "" || effectiveFirmwareMD5URL(product) == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "upload firmware before triggering rollout"})
 		return
 	}
@@ -212,24 +267,23 @@ func rolloutFirmware(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "batch_percentage must be between 1 and 100"})
 		return
 	}
-	if req.BatchIntervalValue < 1 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "batch_interval_value must be at least 1"})
+	batchIntervalMinutes, err := normalizeBatchIntervalMinutes(req.BatchIntervalValue, req.BatchIntervalUnit)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	unit := strings.ToLower(strings.TrimSpace(req.BatchIntervalUnit))
-	batchIntervalMinutes := 0
-	switch unit {
-	case "hour", "hours":
-		batchIntervalMinutes = req.BatchIntervalValue * 60
-	case "day", "days":
-		batchIntervalMinutes = req.BatchIntervalValue * 24 * 60
-	default:
-		c.JSON(http.StatusBadRequest, gin.H{"error": "batch_interval_unit must be hours or days"})
+	if err := db.DB.Model(&product).Updates(map[string]interface{}{
+		"rollout_percentage":       req.BatchPercentage,
+		"rollout_interval_minutes": batchIntervalMinutes,
+	}).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to persist rollout settings"})
 		return
 	}
+	product.RolloutPercentage = req.BatchPercentage
+	product.RolloutIntervalMinutes = batchIntervalMinutes
 
-	rollout, eligibleDevices, totalBatches, err := ota.CreateRollout(product, sessionUser.UserID, req.BatchPercentage, batchIntervalMinutes)
+	rollout, eligibleDevices, totalBatches, err := ota.CreateRollout(product, sessionUser.UserID)
 	if err != nil {
 		if strings.Contains(err.Error(), "no eligible devices") {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -243,7 +297,8 @@ func rolloutFirmware(c *gin.Context) {
 		"rollout_id":             rollout.ID,
 		"product_id":             product.ID,
 		"firmware_version":       product.FirmwareVersion,
-		"firmware_url":           cfg.FirmwareFileURL(product.FirmwareFilename),
+		"firmware_url":           effectiveFirmwareURL(product),
+		"firmware_md5_url":       effectiveFirmwareMD5URL(product),
 		"batch_percentage":       rollout.BatchPercentage,
 		"batch_interval_minutes": rollout.BatchIntervalMinutes,
 		"eligible_devices":       eligibleDevices,

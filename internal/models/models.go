@@ -39,14 +39,15 @@ type Home struct {
 }
 
 type Product struct {
-	ID                  uint                `gorm:"primarykey" json:"id"`
-	Name                string              `gorm:"uniqueIndex" json:"name"`
-	FirmwareVersion     string              `gorm:"column:firmware_version" json:"firmware_version"`
-	FirmwareFilename    string              `gorm:"column:firmware_filename" json:"firmware_filename"`
-	FirmwareMD5         string              `gorm:"column:firmware_md5" json:"firmware_md5"`
-	FirmwareUploadedAt  *time.Time          `gorm:"column:firmware_uploaded_at" json:"firmware_uploaded_at,omitempty"`
-	RolloutDelayDays    int                 `gorm:"column:rollout_delay_days" json:"rollout_delay_days"`
-	ProductCapabilities []ProductCapability `json:"product_capabilities,omitempty"`
+	ID                     uint                `gorm:"primarykey" json:"id"`
+	Name                   string              `gorm:"uniqueIndex" json:"name"`
+	FirmwareVersion        string              `gorm:"column:firmware_version" json:"firmware_version"`
+	FirmwareURL            string              `gorm:"column:firmware_url" json:"firmware_url"`
+	FirmwareMD5URL         string              `gorm:"column:firmware_md5_url" json:"firmware_md5_url"`
+	FirmwareUploadedAt     *time.Time          `gorm:"column:firmware_uploaded_at" json:"firmware_uploaded_at,omitempty"`
+	RolloutPercentage      int                 `gorm:"column:rollout_percentage" json:"rollout_percentage"`
+	RolloutIntervalMinutes int                 `gorm:"column:rollout_interval_minutes" json:"rollout_interval_minutes"`
+	ProductCapabilities    []ProductCapability `json:"product_capabilities,omitempty"`
 }
 
 type Capability struct {
@@ -65,24 +66,23 @@ type ProductCapability struct {
 }
 
 type Device struct {
-	ID        uint           `gorm:"primarykey" json:"id"`
-	CreatedAt time.Time      `json:"created_at"`
-	UpdatedAt time.Time      `json:"updated_at"`
-	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
-	UserID    uint           `json:"user_id"`
-	HomeID    uint           `json:"home_id"`
-	ProductID uint           `json:"product_id"`
-	Name      string         `json:"name"`
-	Product   Product        `gorm:"foreignKey:ProductID" json:"product,omitempty"`
-	Home      Home           `gorm:"foreignKey:HomeID" json:"home,omitempty"`
+	ID              uint           `gorm:"primarykey" json:"id"`
+	CreatedAt       time.Time      `json:"created_at"`
+	UpdatedAt       time.Time      `json:"updated_at"`
+	DeletedAt       gorm.DeletedAt `gorm:"index" json:"-"`
+	UserID          uint           `json:"user_id"`
+	HomeID          uint           `json:"home_id"`
+	ProductID       uint           `json:"product_id"`
+	Name            string         `json:"name"`
+	FirmwareVersion string         `gorm:"column:firmware_version" json:"firmware_version"`
+	Product         Product        `gorm:"foreignKey:ProductID" json:"product,omitempty"`
+	Home            Home           `gorm:"foreignKey:HomeID" json:"home,omitempty"`
 }
 
 type FirmwareRollout struct {
 	ID                   uint       `gorm:"primaryKey" json:"id"`
 	ProductID            uint       `json:"product_id"`
 	TargetVersion        string     `json:"target_version"`
-	FirmwareFilename     string     `json:"firmware_filename"`
-	FirmwareMD5          string     `json:"firmware_md5"`
 	BatchPercentage      int        `json:"batch_percentage"`
 	BatchIntervalMinutes int        `json:"batch_interval_minutes"`
 	Status               string     `json:"status"`
@@ -141,5 +141,5 @@ func BuildStatusTopic(userID, homeID, deviceID uint) string {
 }
 
 func BuildOTACommandTopic(userID, homeID, deviceID uint) string {
-	return fmt.Sprintf("%d/%d/%d/ota/command", userID, homeID, deviceID)
+	return fmt.Sprintf("%d/%d/%d/firmware_update", userID, homeID, deviceID)
 }
