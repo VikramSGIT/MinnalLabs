@@ -33,7 +33,8 @@ func InitMQTT(cfg *config.Config) {
 	}
 }
 
-// Topic format: {user_id}/{home_id}/{device_id}/{component}/{esphome_key}/state
+// Device presence comes from retained MQTT LWT messages on {user_id}/{home_id}/{device_id}/status.
+// Capability state uses {user_id}/{home_id}/{device_id}/{component}/{esphome_key}/state.
 var messagePubHandler pahomqtt.MessageHandler = func(client pahomqtt.Client, msg pahomqtt.Message) {
 	parts := strings.Split(msg.Topic(), "/")
 	if len(parts) == 4 && parts[3] == "status" {
@@ -62,7 +63,7 @@ var messagePubHandler pahomqtt.MessageHandler = func(client pahomqtt.Client, msg
 	log.Printf("MQTT: device %d cap %s = %s", deviceID, capKey, msg.Payload())
 }
 
-// connectHandler subscribes to state topics for all devices, reading entirely from Valkey.
+// connectHandler subscribes to retained status topics and capability state topics for all devices.
 var connectHandler pahomqtt.OnConnectHandler = func(client pahomqtt.Client) {
 	log.Println("Connected to MQTT Broker")
 	subscribeDynsecResponses()

@@ -74,6 +74,19 @@ When the frontend calls `POST /api/enroll/home`, the backend will:
 
 Device enrollment then reuses the stored home MQTT credentials.
 
+### Device online/offline status
+
+Device presence is tracked with retained MQTT LWT status messages on:
+
+```text
+{user_id}/{home_id}/{device_id}/status
+```
+
+Each device publishes `online` as its retained birth message and `offline` as its
+retained will/shutdown message. The backend subscribes to those status topics and
+mirrors the latest value into Valkey so the enrollment APIs can return device
+status quickly without querying the broker on every request.
+
 ## Run the Application
 
 Run the stack with:

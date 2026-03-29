@@ -64,6 +64,29 @@ esphome:
                 }
                 std::string topic = id(g_user_id) + "/" + id(g_home_id) + "/" + id(g_device_id);
                 id(my_mqtt).set_topic_prefix(topic, topic);
+                std::string status_topic = topic + "/status";
+
+                // Retained LWT messages let the backend rebuild presence after reconnecting.
+                mqtt::MQTTMessage birth_message;
+                birth_message.topic = status_topic;
+                birth_message.payload = "online";
+                birth_message.qos = 0;
+                birth_message.retain = true;
+                id(my_mqtt).set_birth_message(std::move(birth_message));
+
+                mqtt::MQTTMessage last_will_message;
+                last_will_message.topic = status_topic;
+                last_will_message.payload = "offline";
+                last_will_message.qos = 0;
+                last_will_message.retain = true;
+                id(my_mqtt).set_last_will(std::move(last_will_message));
+
+                mqtt::MQTTMessage shutdown_message;
+                shutdown_message.topic = status_topic;
+                shutdown_message.payload = "offline";
+                shutdown_message.qos = 0;
+                shutdown_message.retain = true;
+                id(my_mqtt).set_shutdown_message(std::move(shutdown_message));
                 ESP_LOGI("prov", "MQTT configured: %s:%s, topic: %s", id(g_mqtt_url).c_str(), id(g_mqtt_port).c_str(), topic.c_str());
             - delay: 3s
             - ble.disable:
