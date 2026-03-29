@@ -18,6 +18,7 @@ class HomeCreateForm extends HTMLElement {
     this.homes = [];
     this.isLoadingHomes = true;
     this.isSubmitting = false;
+    this.isDeletingHome = false;
     this.selectedHomeId = "";
     this.errorMessage = "";
     this.formState = {
@@ -53,7 +54,12 @@ class HomeCreateForm extends HTMLElement {
                     .join("")}
                 </select>
               </label>
-              <button id="selectBtn" type="submit" class="secondary">Use Selected Home</button>
+              <div class="actions">
+                <button id="selectBtn" type="submit" class="secondary">Use Selected Home</button>
+                <button id="deleteHomeBtn" type="button" class="danger" ${this.isDeletingHome ? "disabled" : ""}>
+                  ${this.isDeletingHome ? "Deleting Home..." : "Delete Selected Home"}
+                </button>
+              </div>
             </form>
           `
         : '<p class="hint">No homes found yet. Create one below.</p>';
@@ -90,6 +96,12 @@ class HomeCreateForm extends HTMLElement {
         .stack {
           display: grid;
           gap: 18px;
+        }
+
+        .actions {
+          display: flex;
+          gap: 12px;
+          flex-wrap: wrap;
         }
 
         .badge {
@@ -187,6 +199,11 @@ class HomeCreateForm extends HTMLElement {
           background: #dbeafe;
         }
 
+        button.danger {
+          background: #dc2626;
+          color: #ffffff;
+        }
+
         button:disabled {
           opacity: 0.65;
           cursor: wait;
@@ -239,10 +256,14 @@ class HomeCreateForm extends HTMLElement {
     this.existingHomeForm = this.shadowRoot.getElementById("existingHomeForm");
     this.existingHomeSelect = this.shadowRoot.getElementById("existingHome");
     this.selectBtn = this.shadowRoot.getElementById("selectBtn");
+    this.deleteHomeBtn = this.shadowRoot.getElementById("deleteHomeBtn");
     this.submitBtn = this.shadowRoot.getElementById("submitBtn");
     this.errorEl = this.shadowRoot.getElementById("error");
     if (this.existingHomeForm) {
       this.existingHomeForm.addEventListener("submit", (event) => this.handleExistingHomeSubmit(event));
+    }
+    if (this.deleteHomeBtn) {
+      this.deleteHomeBtn.addEventListener("click", () => this.handleDeleteHome());
     }
     if (this.existingHomeSelect) {
       this.existingHomeSelect.addEventListener("change", () => {
@@ -302,8 +323,9 @@ class HomeCreateForm extends HTMLElement {
     try {
       const response = await requestJSON("/api/enroll/homes", {}, this.apiBaseUrl);
       this.homes = Array.isArray(response) ? response : [];
-      if (!this.selectedHomeId && this.homes.length > 0) {
-        this.selectedHomeId = String(this.homes[0].home_id);
+      const selectedExists = this.homes.some((home) => String(home.home_id) === String(this.selectedHomeId));
+      if (!selectedExists) {
+        this.selectedHomeId = this.homes.length > 0 ? String(this.homes[0].home_id) : "";
       }
       this.setError("");
     } catch (error) {
@@ -345,6 +367,47 @@ class HomeCreateForm extends HTMLElement {
     );
   }
 
+  async handleDeleteHome() {
+    if (this.isLoadingHomes || this.isDeletingHome || this.homes.length === 0) {
+      return;
+    }
+
+    const home = this.homes.find((entry) => String(entry.home_id) === String(this.selectedHomeId || this.existingHomeSelect?.value || ""));
+    if (!home) {
+      this.setError("Select a home to delete.");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Delete home "${home.name}" permanently? All devices in this home will also be deleted.`,
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    this.setError("");
+    this.isDeletingHome = true;
+    this.setSubmitting(this.isSubmitting);
+
+    try {
+      await requestJSON(`/api/enroll/home/${encodeURIComponent(home.home_id)}`, { method: "DELETE" }, this.apiBaseUrl);
+      await this.loadHomes();
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) {
+        this.dispatchEvent(
+          new CustomEvent("session-expired", {
+            bubbles: true,
+            composed: true,
+          }),
+        );
+      }
+      this.setError(error.message);
+    } finally {
+      this.isDeletingHome = false;
+      this.setSubmitting(this.isSubmitting);
+    }
+  }
+
   captureFormState() {
     this.formState = {
       name: this.shadowRoot.getElementById("name")?.value || "",
@@ -374,10 +437,14 @@ class HomeCreateForm extends HTMLElement {
     this.submitBtn.disabled = isSubmitting;
     this.submitBtn.textContent = isSubmitting ? "Creating Home..." : "Create Home";
     if (this.selectBtn) {
-      this.selectBtn.disabled = isSubmitting || this.isLoadingHomes || this.homes.length === 0;
+      this.selectBtn.disabled = isSubmitting || this.isLoadingHomes || this.isDeletingHome || this.homes.length === 0;
     }
     if (this.existingHomeSelect) {
-      this.existingHomeSelect.disabled = isSubmitting || this.isLoadingHomes || this.homes.length === 0;
+      this.existingHomeSelect.disabled = isSubmitting || this.isLoadingHomes || this.isDeletingHome || this.homes.length === 0;
+    }
+    if (this.deleteHomeBtn) {
+      this.deleteHomeBtn.disabled = isSubmitting || this.isLoadingHomes || this.isDeletingHome || this.homes.length === 0;
+      this.deleteHomeBtn.textContent = this.isDeletingHome ? "Deleting Home..." : "Delete Selected Home";
     }
   }
 
