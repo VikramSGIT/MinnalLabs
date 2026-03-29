@@ -93,6 +93,16 @@ func Subscribe(topic string) {
 	log.Printf("Subscribed to topic: %s", topic)
 }
 
+func Unsubscribe(topic string) {
+	token := Client.Unsubscribe(topic)
+	token.Wait()
+	if err := token.Error(); err != nil {
+		log.Printf("Failed to unsubscribe from topic %s: %v", topic, err)
+		return
+	}
+	log.Printf("Unsubscribed from topic: %s", topic)
+}
+
 func Publish(topic string, payload interface{}) {
 	token := Client.Publish(topic, 1, false, payload)
 	token.Wait()
@@ -112,5 +122,20 @@ func SubscribeDevice(device models.Device) {
 	for _, cap := range caps {
 		topic := models.BuildTopic(device.UserID, device.HomeID, device.ID, cap.Component, cap.EsphomeKey, "state")
 		Subscribe(topic)
+	}
+}
+
+func UnsubscribeDevice(device models.Device) {
+	Unsubscribe(models.BuildStatusTopic(device.UserID, device.HomeID, device.ID))
+
+	caps, err := state.GetProductCaps(device.ProductID)
+	if err != nil {
+		log.Printf("Failed to get caps for product %d while unsubscribing: %v", device.ProductID, err)
+		return
+	}
+
+	for _, cap := range caps {
+		topic := models.BuildTopic(device.UserID, device.HomeID, device.ID, cap.Component, cap.EsphomeKey, "state")
+		Unsubscribe(topic)
 	}
 }

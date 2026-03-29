@@ -192,6 +192,26 @@ func GetAllDevices() []DeviceInfo {
 	return devices
 }
 
+func RemoveDevice(deviceID uint) {
+	if err := rdb.Del(ctx,
+		deviceMetaKey(deviceID),
+		devicePresenceKey(deviceID),
+		deviceStateKey(deviceID),
+	).Err(); err != nil {
+		log.Printf("Error removing cache entries for device %d: %v", deviceID, err)
+	}
+
+	if err := rdb.SRem(ctx, deviceIDsSet, deviceID).Err(); err != nil {
+		log.Printf("Error removing device %d from tracked device set: %v", deviceID, err)
+	}
+}
+
+func RemoveDevices(deviceIDs []uint) {
+	for _, deviceID := range deviceIDs {
+		RemoveDevice(deviceID)
+	}
+}
+
 func SetDevicePresence(deviceID uint, status string) {
 	normalized := strings.ToLower(strings.TrimSpace(status))
 	now := time.Now().UTC()

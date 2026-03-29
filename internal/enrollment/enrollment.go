@@ -52,6 +52,8 @@ func SetupEnrollmentRoutes(r *gin.Engine, appCfg *config.Config) {
 		protected.Use(oauth.RequireSession())
 		protected.GET("/homes", listHomes)
 		protected.GET("/home/:homeID/devices", listHomeDevices)
+		protected.DELETE("/home/:homeID", deleteHome)
+		protected.DELETE("/device/:deviceID", deleteDevice)
 		protected.GET("/device/:deviceID/status", getDeviceStatus)
 		protected.POST("/home", enrollHome)
 		protected.POST("/device", enrollDevice)
@@ -217,6 +219,118 @@ func getDeviceStatus(c *gin.Context) {
 		"mqtt_status":    presence.LastStatus,
 		"last_status_at": presence.LastStatusAt,
 		"last_seen_at":   presence.LastSeenAt,
+	})
+}
+
+func deleteHome(c *gin.Context) {
+	sessionUser, ok := oauth.CurrentSessionUser(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	homeIDValue, err := strconv.ParseUint(c.Param("homeID"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid home id"})
+		return
+	}
+	homeID := uint(homeIDValue)
+
+	var home models.Home
+	if err := db.DB.First(&home, homeID).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "home not found"})
+		return
+	}
+	if home.UserID != sessionUser.UserID {
+		c.JSON(http.StatusForbidden, gin.H{"error": "home does not belong to user"})
+		return
+	}
+
+	var devices []models.Device
+	if err := db.DB.Where("home_id = ?", homeID).Find(&devices).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load home devices"})
+		return
+	}
+
+	if err := db.DB.Transaction(func(tx *gorm.DB) error {
+		if len(devices) > 0 {
+			deviceIDs := make([]uint, 0, len(devices))
+			for _, device := range devices {
+				deviceIDs = append(deviceIDs, device.ID)
+			}
+
+			if err := tx.Unscoped().Where("id IN ?", deviceIDs).Delete(&models.Device{}).Error; err != nil {
+				return fmt.Errorf("delete home devices: %w", err)
+			}
+		}
+
+		if err := tx.Unscoped().Delete(&home).Error; err != nil {
+			return fmt.Errorf("delete home: %w", err)
+		}
+
+		if home.MQTTUsername != "" {
+			if err := mqtt.CleanupHomeAccess(home.UserID, home.ID, home.MQTTUsername); err != nil {
+				return fmt.Errorf("cleanup mqtt access: %w", err)
+			}
+		}
+
+		return nil
+	}); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	for _, device := range devices {
+		mqtt.UnsubscribeDevice(device)
+	}
+	deviceIDs := make([]uint, 0, len(devices))
+	for _, device := range devices {
+		deviceIDs = append(deviceIDs, device.ID)
+	}
+	state.RemoveDevices(deviceIDs)
+
+	c.JSON(http.StatusOK, gin.H{
+		"deleted":    true,
+		"home_id":    home.ID,
+		"device_ids": deviceIDs,
+	})
+}
+
+func deleteDevice(c *gin.Context) {
+	sessionUser, ok := oauth.CurrentSessionUser(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	deviceIDValue, err := strconv.ParseUint(c.Param("deviceID"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid device id"})
+		return
+	}
+	deviceID := uint(deviceIDValue)
+
+	var device models.Device
+	if err := db.DB.First(&device, deviceID).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "device not found"})
+		return
+	}
+	if device.UserID != sessionUser.UserID {
+		c.JSON(http.StatusForbidden, gin.H{"error": "device does not belong to user"})
+		return
+	}
+
+	if err := db.DB.Unscoped().Delete(&device).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete device"})
+		return
+	}
+
+	mqtt.UnsubscribeDevice(device)
+	state.RemoveDevice(device.ID)
+
+	c.JSON(http.StatusOK, gin.H{
+		"deleted":   true,
+		"device_id": device.ID,
 	})
 }
 

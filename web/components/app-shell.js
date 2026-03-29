@@ -330,6 +330,10 @@ class AppShell extends HTMLElement {
     homeDeviceManager.apiBaseUrl = this.config.apiBaseUrl;
     homeDeviceManager.user = this.state.user;
     homeDeviceManager.home = this.state.home;
+    homeDeviceManager.addEventListener("home-deleted", () => {
+      this.state.home = null;
+      this.render();
+    });
     stage.append(homeDeviceManager);
   }
 

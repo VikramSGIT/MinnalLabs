@@ -75,10 +75,13 @@ class HomeDeviceManager extends HTMLElement {
     this.activeTab = "devices";
     this.devices = [];
     this.devicesError = "";
+    this.actionError = "";
     this.isLoadingDevices = true;
     this.isRefreshingDevices = false;
     this.devicePollTimer = null;
     this.isFetchingDevices = false;
+    this.isDeletingHome = false;
+    this.deletingDeviceId = "";
   }
 
   connectedCallback() {
@@ -111,6 +114,20 @@ class HomeDeviceManager extends HTMLElement {
           border: 1px solid #dbeafe;
           background: #ffffff;
           box-shadow: 0 20px 44px rgba(15, 23, 42, 0.08);
+        }
+
+        .panel-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: start;
+          gap: 16px;
+          flex-wrap: wrap;
+        }
+
+        .header-actions {
+          display: flex;
+          gap: 12px;
+          flex-wrap: wrap;
         }
 
         h2, h3 {
@@ -151,6 +168,29 @@ class HomeDeviceManager extends HTMLElement {
         }
 
         .tab-btn:disabled {
+          opacity: 0.65;
+          cursor: wait;
+        }
+
+        .danger-btn,
+        .delete-btn {
+          border: 0;
+          border-radius: 999px;
+          padding: 0.8rem 1.2rem;
+          font: inherit;
+          font-weight: 700;
+          cursor: pointer;
+          color: #ffffff;
+          background: #dc2626;
+        }
+
+        .delete-btn {
+          padding: 0.65rem 1rem;
+          font-size: 0.9rem;
+        }
+
+        .danger-btn:disabled,
+        .delete-btn:disabled {
           opacity: 0.65;
           cursor: wait;
         }
@@ -263,6 +303,14 @@ class HomeDeviceManager extends HTMLElement {
           flex-wrap: wrap;
         }
 
+        .device-actions {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          flex-wrap: wrap;
+          justify-content: end;
+        }
+
         .device-title {
           margin: 0;
           color: #0f172a;
@@ -329,20 +377,34 @@ class HomeDeviceManager extends HTMLElement {
         }
       </style>
       <section class="panel">
-        <div>
-          <h2>Home Devices</h2>
-          <p>Review devices already assigned to this home, check whether they are online, or add a new device over Web Bluetooth.</p>
+        <div class="panel-header">
+          <div>
+            <h2>Home Devices</h2>
+            <p>Review devices already assigned to this home, check whether they are online, or add a new device over Web Bluetooth.</p>
+          </div>
+          <div class="header-actions">
+            ${
+              this.home
+                ? `<button id="deleteHomeBtn" type="button" class="danger-btn" ${this.isDeletingHome ? "disabled" : ""}>${this.isDeletingHome ? "Deleting Home..." : "Delete Home"}</button>`
+                : ""
+            }
+          </div>
         </div>
         <div class="tab-bar" role="tablist" aria-label="Home Device Tabs">
           <button id="devicesTabBtn" type="button" class="tab-btn ${this.activeTab === "devices" ? "active" : ""}" aria-selected="${this.activeTab === "devices"}">Devices</button>
           <button id="addDeviceTabBtn" type="button" class="tab-btn ${this.activeTab === "add" ? "active" : ""}" aria-selected="${this.activeTab === "add"}">Add Device</button>
         </div>
+        ${this.actionError ? `<div class="error" style="margin-top: 18px;">${escapeHtml(this.actionError)}</div>` : ""}
         <div id="content" class="content"></div>
       </section>
     `;
 
     this.shadowRoot.getElementById("devicesTabBtn").addEventListener("click", () => this.setActiveTab("devices"));
     this.shadowRoot.getElementById("addDeviceTabBtn").addEventListener("click", () => this.setActiveTab("add"));
+    const deleteHomeBtn = this.shadowRoot.getElementById("deleteHomeBtn");
+    if (deleteHomeBtn) {
+      deleteHomeBtn.addEventListener("click", () => this.handleDeleteHome());
+    }
 
     const content = this.shadowRoot.getElementById("content");
     if (this.activeTab === "devices") {
@@ -351,6 +413,9 @@ class HomeDeviceManager extends HTMLElement {
       if (refreshBtn) {
         refreshBtn.addEventListener("click", () => this.loadDevices({ forceVisibleLoading: true }));
       }
+      this.shadowRoot.querySelectorAll("[data-device-delete]").forEach((button) => {
+        button.addEventListener("click", () => this.handleDeleteDevice(button.dataset.deviceDelete || ""));
+      });
     } else {
       const enrollment = document.createElement("device-enrollment");
       enrollment.apiBaseUrl = this.apiBaseUrl;
@@ -382,15 +447,27 @@ class HomeDeviceManager extends HTMLElement {
         : `
           <div class="list">
             ${this.devices
-              .map(
-                (device) => `
+              .map((device) => {
+                const isDeletingDevice = this.deletingDeviceId === String(device.device_id);
+                const deleteDisabled = this.isDeletingHome || Boolean(this.deletingDeviceId);
+                return `
                   <article class="device">
                     <div class="device-header">
                       <div>
                         <h3 class="device-title">${escapeHtml(device.name || "Unnamed Device")}</h3>
                         <p class="device-subtitle">Device ID ${escapeHtml(device.device_id)} · Product ${escapeHtml(device.product_id)}</p>
                       </div>
-                      <span class="badge ${statusClass(device)}">${statusLabel(device)}</span>
+                      <div class="device-actions">
+                        <span class="badge ${statusClass(device)}">${statusLabel(device)}</span>
+                        <button
+                          type="button"
+                          class="delete-btn"
+                          data-device-delete="${escapeHtml(device.device_id)}"
+                          ${deleteDisabled ? "disabled" : ""}
+                        >
+                          ${isDeletingDevice ? "Deleting..." : "Delete Device"}
+                        </button>
+                      </div>
                     </div>
                     <div class="meta">
                       <div class="meta-item">
@@ -407,8 +484,8 @@ class HomeDeviceManager extends HTMLElement {
                       </div>
                     </div>
                   </article>
-                `,
-              )
+                `;
+              })
               .join("")}
           </div>
         `;
@@ -426,7 +503,7 @@ class HomeDeviceManager extends HTMLElement {
       </div>
       <div class="toolbar">
         <p class="toolbar-text">${this.isRefreshingDevices ? "Refreshing statuses..." : "Statuses auto-refresh while this tab is open."}</p>
-        <button id="refreshDevicesBtn" type="button" class="refresh-btn" ${this.isFetchingDevices ? "disabled" : ""}>${this.isFetchingDevices ? "Refreshing..." : "Refresh Devices"}</button>
+        <button id="refreshDevicesBtn" type="button" class="refresh-btn" ${this.isFetchingDevices || this.isDeletingHome || Boolean(this.deletingDeviceId) ? "disabled" : ""}>${this.isFetchingDevices ? "Refreshing..." : "Refresh Devices"}</button>
       </div>
       ${this.devicesError ? `<div class="error">${escapeHtml(this.devicesError)}</div>` : ""}
       ${listMarkup}
@@ -517,8 +594,95 @@ class HomeDeviceManager extends HTMLElement {
     }
   }
 
+  async handleDeleteDevice(deviceID) {
+    if (!deviceID || this.isDeletingHome || this.deletingDeviceId) {
+      return;
+    }
+
+    const device = this.devices.find((entry) => String(entry.device_id) === String(deviceID));
+    const confirmed = window.confirm(
+      `Delete ${device?.name || "this device"} permanently? This removes it from the app and cannot be undone.`,
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    this.actionError = "";
+    this.devicesError = "";
+    this.deletingDeviceId = String(deviceID);
+    if (this.activeTab === "devices") {
+      this.render();
+    }
+
+    try {
+      await requestJSON(`/api/enroll/device/${encodeURIComponent(deviceID)}`, { method: "DELETE" }, this.apiBaseUrl);
+      await this.loadDevices({ forceVisibleLoading: true });
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) {
+        this.dispatchEvent(
+          new CustomEvent("session-expired", {
+            bubbles: true,
+            composed: true,
+          }),
+        );
+      }
+      this.actionError = error.message;
+    } finally {
+      this.deletingDeviceId = "";
+      if (this.isConnected) {
+        this.render();
+      }
+    }
+  }
+
+  async handleDeleteHome() {
+    if (!this.home || !this.home.home_id || this.isDeletingHome || this.deletingDeviceId) {
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Delete home "${this.home.name}" permanently? All devices in this home will also be deleted.`,
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    this.actionError = "";
+    this.devicesError = "";
+    this.isDeletingHome = true;
+    this.stopPolling();
+    this.render();
+
+    try {
+      await requestJSON(`/api/enroll/home/${encodeURIComponent(this.home.home_id)}`, { method: "DELETE" }, this.apiBaseUrl);
+      this.dispatchEvent(
+        new CustomEvent("home-deleted", {
+          bubbles: true,
+          composed: true,
+          detail: this.home,
+        }),
+      );
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) {
+        this.dispatchEvent(
+          new CustomEvent("session-expired", {
+            bubbles: true,
+            composed: true,
+          }),
+        );
+      }
+      this.actionError = error.message;
+      this.isDeletingHome = false;
+      this.syncPolling();
+      if (this.isConnected) {
+        this.render();
+      }
+    }
+  }
+
   async handleDeviceProvisioned() {
     this.activeTab = "devices";
+    this.actionError = "";
     this.render();
     this.syncPolling();
     await this.loadDevices({ forceVisibleLoading: true });
