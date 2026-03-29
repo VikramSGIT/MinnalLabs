@@ -110,7 +110,6 @@ ota:
   - platform: esphome
     password: "aed0a004cac4aee6f8b5d5c294308a4c"
 
-# --- 1. GLOBAL MEMORY (NVS) ---
 globals:
   - id: g_user_id
     type: std::string
@@ -158,12 +157,10 @@ globals:
     max_restore_data_length: 64
     initial_value: '""'
 
-# --- 2. MQTT CONFIGURATION ---
 mqtt:
   id: my_mqtt
   broker: ""
 
-# --- 3. BLUETOOTH SERVER ---
 esp32_ble_server:
   on_connect:
     - logger.log: "Dashboard connected!"
@@ -278,7 +275,6 @@ esp32_ble_server:
                 id: g_home_id
                 value: !lambda 'return std::string(x.begin(), x.end());'
 
-        # Force NVS save and Restart
         - uuid: "12345678-1234-1234-1234-00000000000B"
           write: true
           on_write:
@@ -287,7 +283,6 @@ esp32_ble_server:
             - delay: 2s
             - button.press: restart_device
 
-# --- 4. SYSTEM COMPONENTS ---
 button:
   - platform: restart
     id: restart_device
