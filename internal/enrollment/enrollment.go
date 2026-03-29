@@ -3,6 +3,7 @@ package enrollment
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -430,9 +431,10 @@ func enrollDevice(c *gin.Context) {
 	}
 
 	var req struct {
-		HomeID    uint   `json:"home_id" binding:"required"`
-		Name      string `json:"name" binding:"required"`
-		ProductID uint   `json:"product_id" binding:"required"`
+		HomeID      uint   `json:"home_id" binding:"required"`
+		Name        string `json:"name" binding:"required"`
+		ProductID   uint   `json:"product_id" binding:"required"`
+		ProductName string `json:"product_name" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -450,8 +452,12 @@ func enrollDevice(c *gin.Context) {
 	}
 
 	var product models.Product
-	if err := db.DB.First(&product, req.ProductID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "product not found"})
+	if err := db.DB.Where("id = ? AND name = ?", req.ProductID, req.ProductName).Take(&product).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "product not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load product"})
 		return
 	}
 

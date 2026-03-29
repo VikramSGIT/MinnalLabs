@@ -11,6 +11,7 @@ function escapeHtml(value) {
 
 const SERVICE_UUID = "12345678-1234-1234-1234-000000000000";
 const UUIDS = {
+  productType: "12345678-1234-1234-1234-000000000001",
   productId: "12345678-1234-1234-1234-00000000000c",
   userId: "12345678-1234-1234-1234-000000000002",
   deviceId: "12345678-1234-1234-1234-000000000003",
@@ -74,6 +75,7 @@ class DeviceEnrollment extends HTMLElement {
     this.bluetoothDevice = null;
     this.gattServer = null;
     this.mainService = null;
+    this.productName = "";
     this.productId = "";
     this.isWorking = false;
     this.currentAction = "";
@@ -316,7 +318,7 @@ class DeviceEnrollment extends HTMLElement {
       <section class="panel">
         <div>
           <h2>Enroll Device</h2>
-          <p>Read the device product ID over Bluetooth, create the backend device record, then write backend-issued IDs plus Wi-Fi and MQTT settings to the device.</p>
+          <p>Read the device product identity over Bluetooth, create the backend device record, then write backend-issued IDs plus Wi-Fi and MQTT settings to the device.</p>
         </div>
 
         <div class="meta">
@@ -336,12 +338,16 @@ class DeviceEnrollment extends HTMLElement {
           <div class="button-row">
             <button id="connectBtn" class="primary" type="button">Connect Device</button>
             <button id="disconnectBtn" class="danger" type="button" disabled>Disconnect</button>
-            <button id="readBtn" type="button" disabled>Read Product ID</button>
+            <button id="readBtn" type="button" disabled>Read Product Info</button>
           </div>
         </div>
 
         <div class="section">
           <div class="grid">
+            <label>
+              Product Name
+              <input id="productNameInput" type="text" readonly placeholder="Read from Bluetooth">
+            </label>
             <label>
               Product ID
               <input id="productIdInput" type="text" readonly placeholder="Read from Bluetooth">
@@ -379,6 +385,7 @@ class DeviceEnrollment extends HTMLElement {
     this.readBtn = this.shadowRoot.getElementById("readBtn");
     this.enrollBtn = this.shadowRoot.getElementById("enrollBtn");
     this.clearLogBtn = this.shadowRoot.getElementById("clearLogBtn");
+    this.productNameInput = this.shadowRoot.getElementById("productNameInput");
     this.productIdInput = this.shadowRoot.getElementById("productIdInput");
     this.deviceNameInput = this.shadowRoot.getElementById("deviceNameInput");
     this.errorEl = this.shadowRoot.getElementById("error");
@@ -389,7 +396,7 @@ class DeviceEnrollment extends HTMLElement {
   bindEvents() {
     this.connectBtn.addEventListener("click", () => this.connectDevice());
     this.disconnectBtn.addEventListener("click", () => this.disconnectDevice());
-    this.readBtn.addEventListener("click", () => this.readProductId());
+    this.readBtn.addEventListener("click", () => this.readProductInfo());
     this.enrollBtn.addEventListener("click", () => this.enrollAndProvision());
     this.clearLogBtn.addEventListener("click", () => {
       this.logEl.innerHTML = "";
@@ -404,6 +411,7 @@ class DeviceEnrollment extends HTMLElement {
     this.disconnectBtn.disabled = !isConnected;
     this.readBtn.disabled = this.isWorking || !isConnected;
     this.enrollBtn.disabled = this.isWorking || !isConnected;
+    this.productNameInput.value = this.productName;
     this.productIdInput.value = this.productId;
     this.connectBtn.textContent = this.currentAction === "connecting" ? "Connecting..." : "Connect Device";
     this.enrollBtn.textContent = this.currentAction === "provisioning" ? "Provisioning..." : "Enroll And Provision";
@@ -439,7 +447,7 @@ class DeviceEnrollment extends HTMLElement {
       this.mainService = await this.gattServer.getPrimaryService(SERVICE_UUID);
       this.log("Connected to provisioning service.", "success");
 
-      await this.readProductId();
+      await this.readProductInfo();
     } catch (error) {
       this.setError(error.message);
       this.log(`Bluetooth connection failed: ${error.message}`, "error");
@@ -458,26 +466,48 @@ class DeviceEnrollment extends HTMLElement {
     }
   }
 
-  async readProductId() {
+  async readProductInfo() {
     if (!this.mainService) {
       return;
     }
 
     this.setError("");
+    this.productName = "";
+    this.productId = "";
+    this.syncUi();
     try {
-      this.log("Reading product ID from the device...", "info");
-      const characteristic = await this.mainService.getCharacteristic(UUIDS.productId);
-      const value = await characteristic.readValue();
-      this.productId = new TextDecoder("utf-8").decode(value).trim();
-      this.productIdInput.value = this.productId;
-      this.log(`Product ID detected: ${this.productId}`, "success");
+      this.log("Reading product info from the device...", "info");
+      const [productTypeCharacteristic, productIdCharacteristic] = await Promise.all([
+        this.mainService.getCharacteristic(UUIDS.productType),
+        this.mainService.getCharacteristic(UUIDS.productId),
+      ]);
+      const [productTypeValue, productIdValue] = await Promise.all([
+        productTypeCharacteristic.readValue(),
+        productIdCharacteristic.readValue(),
+      ]);
+
+      this.productName = new TextDecoder("utf-8").decode(productTypeValue).trim();
+      this.productId = new TextDecoder("utf-8").decode(productIdValue).trim();
+
+      if (!this.productName) {
+        throw new Error("Device reported an empty product name.");
+      }
+      if (!this.productId) {
+        throw new Error("Device reported an empty product ID.");
+      }
+
+      this.syncUi();
+      this.log(`Product detected: ${this.productName} (ID ${this.productId})`, "success");
     } catch (error) {
       this.setError(error.message);
-      this.log(`Failed to read product ID: ${error.message}`, "error");
+      this.syncUi();
+      this.log(`Failed to read product info: ${error.message}`, "error");
     }
   }
 
   handleDisconnected() {
+    this.productName = "";
+    this.productId = "";
     this.mainService = null;
     this.gattServer = null;
     this.syncUi();
@@ -495,8 +525,8 @@ class DeviceEnrollment extends HTMLElement {
       return;
     }
 
-    if (!this.productId) {
-      this.setError("Read the device product ID before provisioning.");
+    if (!this.productName || !this.productId) {
+      this.setError("Read the device product info before provisioning.");
       return;
     }
 
@@ -519,6 +549,7 @@ class DeviceEnrollment extends HTMLElement {
           home_id: this.home.home_id,
           name: deviceName,
           product_id: productId,
+          product_name: this.productName,
         },
         this.apiBaseUrl,
       );
@@ -619,6 +650,8 @@ class DeviceEnrollment extends HTMLElement {
     this.summaryEl.classList.add("visible");
     this.summaryEl.innerHTML = [
       ["Device Name", deviceName],
+      ["Product Name", this.productName || "Unknown"],
+      ["Product ID", this.productId || "Unknown"],
       ["Device ID", device.device_id],
       ["User ID", device.user_id],
       ["Home ID", device.home_id],
