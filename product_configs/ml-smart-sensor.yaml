@@ -1,5 +1,5 @@
 substitutions:
-  firmware_version: v1.0.1
+  firmware_version: v0.0.0_1
 
 esphome:
   name: ml-smart-sensor-v1
