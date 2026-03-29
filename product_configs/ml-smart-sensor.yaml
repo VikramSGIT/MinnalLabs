@@ -4,39 +4,6 @@ esphome:
   on_boot:
     priority: 200
     then:
-      - logger.log:
-          format: "===== BOOT DEBUG ====="
-          level: INFO
-      - logger.log:
-          format: "g_wifi_ssid: [%s]"
-          args: ['id(g_wifi_ssid).c_str()']
-      - logger.log:
-          format: "g_wifi_password: [%s]"
-          args: ['id(g_wifi_password).c_str()']
-      - logger.log:
-          format: "g_mqtt_url: [%s]"
-          args: ['id(g_mqtt_url).c_str()']
-      - logger.log:
-          format: "g_mqtt_username: [%s]"
-          args: ['id(g_mqtt_username).c_str()']
-      - logger.log:
-          format: "g_mqtt_password: [%s]"
-          args: ['id(g_mqtt_password).c_str()']
-      - logger.log:
-          format: "g_mqtt_port: [%s]"
-          args: ['id(g_mqtt_port).c_str()']
-      - logger.log:
-          format: "g_user_id: [%s]"
-          args: ['id(g_user_id).c_str()']
-      - logger.log:
-          format: "g_home_id: [%s]"
-          args: ['id(g_home_id).c_str()']
-      - logger.log:
-          format: "g_device_id: [%s]"
-          args: ['id(g_device_id).c_str()']
-      - logger.log:
-          format: "===== END BOOT DEBUG ====="
-          level: INFO
       - lambda: |-
           std::string product_name = "ml-smart-sensor-v1";
           id(char_product_type).set_value(std::vector<uint8_t>(product_name.begin(), product_name.end()));
@@ -102,13 +69,6 @@ esp32:
     type: esp-idf
 
 logger:
-api:
-  encryption:
-    key: "RwQrg17nYdokW2uJPUI+Wohl6l+nLcqcwHcERiysb4Y="
-
-ota:
-  - platform: esphome
-    password: "aed0a004cac4aee6f8b5d5c294308a4c"
 
 globals:
   - id: g_user_id
