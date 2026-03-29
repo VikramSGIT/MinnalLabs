@@ -37,6 +37,11 @@ esphome:
       - logger.log:
           format: "===== END BOOT DEBUG ====="
           level: INFO
+      - lambda: |-
+          std::string product_name = "ml-smart-sensor-v1";
+          id(char_product_type).set_value(std::vector<uint8_t>(product_name.begin(), product_name.end()));
+          std::string product_id = "1";
+          id(char_product_id).set_value(std::vector<uint8_t>(product_id.begin(), product_id.end()));
       - if:
           condition:
             lambda: 'return id(g_wifi_ssid).length() > 0;'
@@ -67,9 +72,6 @@ esphome:
             - wifi.disable:
             - mqtt.disable:
             - script.execute: blink_enrollment_led
-            - lambda: |-
-                std::string val = "ml-smart-sensor-v1";
-                id(char_product_type).set_value(std::vector<uint8_t>(val.begin(), val.end()));
 
 esp32:
   board: esp32-c6-devkitc-1
@@ -157,6 +159,10 @@ esp32_ble_server:
       characteristics:
         - uuid: "12345678-1234-1234-1234-000000000001"
           id: char_product_type
+          read: true
+
+        - uuid: "12345678-1234-1234-1234-00000000000C"
+          id: char_product_id
           read: true
 
         - uuid: "12345678-1234-1234-1234-000000000002"
