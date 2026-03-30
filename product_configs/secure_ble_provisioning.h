@@ -8,13 +8,12 @@
 #include <vector>
 
 #include <ArduinoJson.h>
+#include <aes/esp_aes_gcm.h>
 #include <esp_log.h>
 #include <mbedtls/base64.h>
 #include <mbedtls/ctr_drbg.h>
 #include <mbedtls/ecdh.h>
 #include <mbedtls/entropy.h>
-#include <mbedtls/gcm.h>
-#include <mbedtls/hkdf.h>
 #include <mbedtls/md.h>
 
 namespace secure_ble {
@@ -344,6 +343,43 @@ inline bool derive_shared_secret(const uint8_t *peer_public_key,
   return true;
 }
 
+inline bool hkdf_sha256_32(const uint8_t *ikm,
+                           size_t ikm_len,
+                           const uint8_t *info,
+                           size_t info_len,
+                           uint8_t *okm,
+                           std::string &error) {
+  const mbedtls_md_info_t *sha256_info = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
+  if (sha256_info == nullptr) {
+    error = "sha256 unavailable";
+    return false;
+  }
+
+  unsigned char zero_salt[kKeySize] = {0};
+  unsigned char prk[kKeySize] = {0};
+  int ret = mbedtls_md_hmac(sha256_info, zero_salt, sizeof(zero_salt), ikm, ikm_len, prk);
+  if (ret != 0) {
+    error = "hkdf extract failed";
+    return false;
+  }
+
+  std::vector<unsigned char> expand_input;
+  expand_input.reserve(info_len + 1);
+  if (info != nullptr && info_len > 0) {
+    expand_input.insert(expand_input.end(), info, info + info_len);
+  }
+  expand_input.push_back(0x01);
+
+  ret = mbedtls_md_hmac(sha256_info, prk, sizeof(prk),
+                        expand_input.data(), expand_input.size(), okm);
+  if (ret != 0) {
+    error = "hkdf expand failed";
+    return false;
+  }
+
+  return true;
+}
+
 inline bool decrypt_envelope(const std::vector<uint8_t> &envelope,
                              std::vector<uint8_t> &plaintext,
                              std::string &error) {
@@ -378,28 +414,21 @@ inline bool decrypt_envelope(const std::vector<uint8_t> &envelope,
   }
 
   uint8_t aes_key[kKeySize] = {0};
-  const mbedtls_md_info_t *sha256_info = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
-  if (sha256_info == nullptr) {
-    error = "sha256 unavailable";
-    return false;
-  }
-  int ret = mbedtls_hkdf(sha256_info, nullptr, 0, shared_secret, sizeof(shared_secret),
-                         reinterpret_cast<const unsigned char *>(kHkdfInfo), strlen(kHkdfInfo),
-                         aes_key, sizeof(aes_key));
-  if (ret != 0) {
-    error = "hkdf failed";
+  if (!hkdf_sha256_32(shared_secret, sizeof(shared_secret),
+                      reinterpret_cast<const uint8_t *>(kHkdfInfo), strlen(kHkdfInfo),
+                      aes_key, error)) {
     return false;
   }
 
   plaintext.assign(ciphertext_len, 0);
-  mbedtls_gcm_context gcm;
-  mbedtls_gcm_init(&gcm);
-  ret = mbedtls_gcm_setkey(&gcm, MBEDTLS_CIPHER_ID_AES, aes_key, sizeof(aes_key) * 8);
+  esp_gcm_context gcm;
+  esp_aes_gcm_init(&gcm);
+  int ret = esp_aes_gcm_setkey(&gcm, MBEDTLS_CIPHER_ID_AES, aes_key, sizeof(aes_key) * 8);
   if (ret == 0) {
-    ret = mbedtls_gcm_auth_decrypt(&gcm, ciphertext_len, nonce, kNonceSize, nullptr, 0,
+    ret = esp_aes_gcm_auth_decrypt(&gcm, ciphertext_len, nonce, kNonceSize, nullptr, 0,
                                    tag, kGcmTagSize, ciphertext, plaintext.data());
   }
-  mbedtls_gcm_free(&gcm);
+  esp_aes_gcm_free(&gcm);
 
   if (ret != 0) {
     error = "aes-gcm decrypt failed";
@@ -416,7 +445,7 @@ inline bool parse_plaintext_payload(const std::vector<uint8_t> &plaintext,
     return false;
   }
 
-  StaticJsonDocument<1024> doc;
+  JsonDocument doc;
   DeserializationError parse_error = deserializeJson(doc, plaintext.data(), plaintext.size());
   if (parse_error) {
     error = "provisioning JSON parse failed";
