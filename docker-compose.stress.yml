@@ -112,7 +112,7 @@ services:
       CADDY_BASE_URL: http://caddy
       OAUTH_CLIENT_ID: google-client
       OAUTH_CLIENT_SECRET: stress-oauth-secret
-      OAUTH_REDIRECT_URI: https://oauth-redirect.googleusercontent.com/
+      OAUTH_REDIRECT_URI: http://127.0.0.1/oauth/callback
       SESSION_COOKIE_NAME: user_session
       DB_HOST: postgres
       DB_PORT: 5432

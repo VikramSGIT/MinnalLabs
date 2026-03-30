@@ -24,8 +24,18 @@ type SessionUser struct {
 }
 
 func IsAdminUser(userID uint) bool {
-	var admin localmodels.AdminUser
-	return db.DB.Select("user_id").First(&admin, "user_id = ?", userID).Error == nil
+	if userID == 0 {
+		return false
+	}
+
+	var count int64
+	if err := db.DB.Model(&localmodels.AdminUser{}).
+		Where("user_id = ?", userID).
+		Count(&count).Error; err != nil {
+		return false
+	}
+
+	return count > 0
 }
 
 func initSessionConfig(cfg *config.Config) {

@@ -15,6 +15,8 @@ import (
 	"github.com/iot-backend/internal/models"
 	"github.com/iot-backend/internal/mqtt"
 	"github.com/iot-backend/internal/state"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 const workerInterval = 30 * time.Second
@@ -209,51 +211,84 @@ func CreateRollout(product models.Product, createdBy uint) (*models.FirmwareRoll
 		return nil, 0, 0, fmt.Errorf("cancel active rollouts: %w", err)
 	}
 
-	now := time.Now().UTC()
-	rollout := &models.FirmwareRollout{
-		ProductID:            product.ID,
-		TargetVersion:        product.FirmwareVersion,
-		BatchPercentage:      batchPercentage,
-		BatchIntervalMinutes: batchIntervalMinutes,
-		Status:               rolloutStatusPending,
-		NextBatchAt:          &now,
-		CreatedByUserID:      createdBy,
-	}
-	if err := db.DB.Create(rollout).Error; err != nil {
-		return nil, 0, 0, fmt.Errorf("create rollout: %w", err)
-	}
+	var (
+		rollout      *models.FirmwareRollout
+		totalDevices int
+		totalBatches int
+	)
 
-	ordered := make([]deviceWithSort, 0, len(eligible))
-	for _, device := range eligible {
-		ordered = append(ordered, deviceWithSort{
-			Device:  device,
-			SortKey: deterministicSortKey(rollout.ID, device.ID),
-		})
-	}
-	sort.Slice(ordered, func(i, j int) bool {
-		if ordered[i].SortKey == ordered[j].SortKey {
-			return ordered[i].Device.ID < ordered[j].Device.ID
+	if err := db.DB.Transaction(func(tx *gorm.DB) error {
+		var lockedDevices []models.Device
+		if err := tx.
+			Clauses(clause.Locking{Strength: "UPDATE"}).
+			Select("id, user_id, home_id, product_id, firmware_version").
+			Where("product_id = ? AND deleted_at IS NULL", product.ID).
+			Find(&lockedDevices).Error; err != nil {
+			return fmt.Errorf("load rollout devices: %w", err)
 		}
-		return ordered[i].SortKey < ordered[j].SortKey
-	})
 
-	size := batchSize(len(ordered), batchPercentage)
-	rows := make([]models.FirmwareRolloutDevice, 0, len(ordered))
-	for idx, item := range ordered {
-		rows = append(rows, models.FirmwareRolloutDevice{
-			RolloutID:           rollout.ID,
-			DeviceID:            item.Device.ID,
-			BatchNumber:         (idx / size) + 1,
-			State:               rolloutDevicePending,
-			LastReportedVersion: "",
+		eligible = eligible[:0]
+		for _, device := range lockedDevices {
+			if currentDeviceFirmwareVersion(device) == product.FirmwareVersion {
+				continue
+			}
+			eligible = append(eligible, device)
+		}
+		if len(eligible) == 0 {
+			return fmt.Errorf("no eligible devices need this firmware")
+		}
+
+		now := time.Now().UTC()
+		rollout = &models.FirmwareRollout{
+			ProductID:            product.ID,
+			TargetVersion:        product.FirmwareVersion,
+			BatchPercentage:      batchPercentage,
+			BatchIntervalMinutes: batchIntervalMinutes,
+			Status:               rolloutStatusPending,
+			NextBatchAt:          &now,
+			CreatedByUserID:      createdBy,
+		}
+		if err := tx.Create(rollout).Error; err != nil {
+			return fmt.Errorf("create rollout: %w", err)
+		}
+
+		ordered := make([]deviceWithSort, 0, len(eligible))
+		for _, device := range eligible {
+			ordered = append(ordered, deviceWithSort{
+				Device:  device,
+				SortKey: deterministicSortKey(rollout.ID, device.ID),
+			})
+		}
+		sort.Slice(ordered, func(i, j int) bool {
+			if ordered[i].SortKey == ordered[j].SortKey {
+				return ordered[i].Device.ID < ordered[j].Device.ID
+			}
+			return ordered[i].SortKey < ordered[j].SortKey
 		})
-	}
-	if err := db.DB.Create(&rows).Error; err != nil {
-		return nil, 0, 0, fmt.Errorf("create rollout devices: %w", err)
+
+		size := batchSize(len(ordered), batchPercentage)
+		rows := make([]models.FirmwareRolloutDevice, 0, len(ordered))
+		for idx, item := range ordered {
+			rows = append(rows, models.FirmwareRolloutDevice{
+				RolloutID:           rollout.ID,
+				DeviceID:            item.Device.ID,
+				BatchNumber:         (idx / size) + 1,
+				State:               rolloutDevicePending,
+				LastReportedVersion: "",
+			})
+		}
+		if err := tx.Create(&rows).Error; err != nil {
+			return fmt.Errorf("create rollout devices: %w", err)
+		}
+
+		totalDevices = len(ordered)
+		totalBatches = int(math.Ceil(float64(len(ordered)) / float64(size)))
+		return nil
+	}); err != nil {
+		return nil, 0, 0, err
 	}
 
-	totalBatches := int(math.Ceil(float64(len(ordered)) / float64(size)))
-	return rollout, len(ordered), totalBatches, nil
+	return rollout, totalDevices, totalBatches, nil
 }
 
 func ListRolloutsForProduct(productID uint, limit int) ([]RolloutSummary, error) {

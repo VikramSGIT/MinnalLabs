@@ -9,7 +9,7 @@ INSERT INTO oauth_clients (id, secret, domain, user_id)
 VALUES (
     'google-client',
     'stress-oauth-secret',
-    'https://oauth-redirect.googleusercontent.com/',
+    'http://127.0.0.1/oauth/callback',
     '1'
 )
 ON CONFLICT (id) DO UPDATE SET

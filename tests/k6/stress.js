@@ -8,7 +8,7 @@ const BASE_URL = stripTrailingSlash(__ENV.BASE_URL || 'http://localhost:8080');
 const SESSION_COOKIE_NAME = __ENV.SESSION_COOKIE_NAME || 'user_session';
 const OAUTH_CLIENT_ID = __ENV.OAUTH_CLIENT_ID || 'google-client';
 const OAUTH_CLIENT_SECRET = __ENV.OAUTH_CLIENT_SECRET || '';
-const OAUTH_REDIRECT_URI = __ENV.OAUTH_REDIRECT_URI || 'https://oauth-redirect.googleusercontent.com/';
+const OAUTH_REDIRECT_URI = __ENV.OAUTH_REDIRECT_URI || 'http://127.0.0.1/oauth/callback';
 const PRODUCT_NAME = __ENV.K6_PRODUCT_NAME || 'ml-smart-sensor-v1';
 const DEFAULT_PRODUCT_ID = Number(__ENV.K6_PRODUCT_ID || '1');
 const DEVICE_PUBLIC_KEY = __ENV.K6_DEVICE_PUBLIC_KEY || 'AQbnaqQshSiDwqVRxeH8lTij1x49dJjzhQqAwtbW4EI=';
