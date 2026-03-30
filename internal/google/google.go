@@ -82,13 +82,17 @@ func parseCompoundID(compoundID string) (uint, string, error) {
 func handleSync() interface{} {
 	devices := state.GetAllDevices()
 
-	nameMap := make(map[uint]string)
+	deviceIDs := make([]uint, 0, len(devices))
 	for _, d := range devices {
-		if _, exists := nameMap[d.ID]; !exists {
-			var dev models.Device
-			if err := db.DB.Select("name").First(&dev, d.ID).Error; err == nil {
-				nameMap[d.ID] = dev.Name
-			}
+		deviceIDs = append(deviceIDs, d.ID)
+	}
+
+	nameMap := make(map[uint]string, len(deviceIDs))
+	if len(deviceIDs) > 0 {
+		var dbDevices []models.Device
+		db.DB.Select("id, name").Where("id IN ?", deviceIDs).Find(&dbDevices)
+		for _, dev := range dbDevices {
+			nameMap[dev.ID] = dev.Name
 		}
 	}
 
