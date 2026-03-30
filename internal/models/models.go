@@ -140,13 +140,17 @@ type OAuthClient struct {
 func (OAuthClient) TableName() string { return "oauth_clients" }
 
 type OAuthToken struct {
-	ID        uint `gorm:"primaryKey"`
-	ClientID  string
-	UserID    string
-	Access    string
-	Refresh   string
-	ExpiresIn time.Duration
-	CreatedAt time.Time
+	ID        uint       `gorm:"primaryKey"`
+	ClientID  string     `gorm:"column:client_id"`
+	UserID    string     `gorm:"column:user_id"`
+	Code      string     `gorm:"column:code"`
+	Access    string     `gorm:"column:access"`
+	Refresh   string     `gorm:"column:refresh"`
+	Data      string     `gorm:"column:data"`
+	ExpiresIn int64      `gorm:"column:expires_in"`
+	ExpiresAt *time.Time `gorm:"column:expires_at"`
+	CreatedAt time.Time  `gorm:"column:created_at"`
+	UpdatedAt time.Time  `gorm:"column:updated_at"`
 }
 
 func (OAuthToken) TableName() string { return "oauth_tokens" }

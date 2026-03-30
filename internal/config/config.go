@@ -44,6 +44,10 @@ type Config struct {
 		Addr     string
 		Password string
 	}
+	OAuth struct {
+		ClientID     string
+		ClientSecret string
+	}
 	Firmware struct {
 		StorageDir string
 	}
@@ -82,6 +86,8 @@ func LoadConfig() *Config {
 	viper.SetDefault("session.same_site", "Lax")
 	viper.SetDefault("valkey.addr", "localhost:6379")
 	viper.SetDefault("valkey.password", "")
+	viper.SetDefault("oauth.client_id", "google-client")
+	viper.SetDefault("oauth.client_secret", "")
 	viper.SetDefault("firmware.storage_dir", "./firmware")
 
 	if err := viper.ReadInConfig(); err != nil {

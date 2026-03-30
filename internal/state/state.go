@@ -75,6 +75,10 @@ func InitState(cfg *config.Config, db *gorm.DB) {
 	log.Println("Connected to Valkey")
 }
 
+func RedisClient() *redis.Client {
+	return rdb
+}
+
 // SyncProductCaps loads product-capability mappings from PostgreSQL into Valkey.
 // This is the only periodic DB sync — everything else is write-through only.
 func SyncProductCaps() {

@@ -11,14 +11,15 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
-	devcrypto "github.com/iot-backend/internal/crypto"
 	"github.com/iot-backend/internal/config"
+	devcrypto "github.com/iot-backend/internal/crypto"
 	"github.com/iot-backend/internal/db"
 	"github.com/iot-backend/internal/models"
 	"github.com/iot-backend/internal/mqtt"
 	"github.com/iot-backend/internal/oauth"
 	"github.com/iot-backend/internal/ota"
 	"github.com/iot-backend/internal/state"
+	"github.com/iot-backend/internal/validation"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 )
@@ -71,6 +72,16 @@ func enrollUser(c *gin.Context) {
 		Password string `json:"password" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
+		return
+	}
+
+	req.Username = validation.NormalizeUsername(req.Username)
+	if err := validation.ValidateUsername(req.Username); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := validation.ValidatePassword(req.Password); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -481,7 +492,23 @@ func enrollHome(c *gin.Context) {
 		WiFiPassword string `json:"wifi_password"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
+		return
+	}
+
+	var err error
+	req.Name, err = validation.ValidateRequiredTrimmed("name", req.Name, 255)
+	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	req.WiFiSSID, err = validation.ValidateOptionalTrimmed("wifi_ssid", req.WiFiSSID, 255)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if len(req.WiFiPassword) > 255 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "wifi_password must be at most 255 characters"})
 		return
 	}
 
@@ -492,7 +519,7 @@ func enrollHome(c *gin.Context) {
 		provisioned bool
 	)
 
-	err := db.DB.Transaction(func(tx *gorm.DB) error {
+	err = db.DB.Transaction(func(tx *gorm.DB) error {
 		home = models.Home{
 			UserID:       sessionUser.UserID,
 			Name:         req.Name,
@@ -554,13 +581,30 @@ func enrollDevice(c *gin.Context) {
 	}
 
 	var req struct {
-		HomeID         uint   `json:"home_id" binding:"required"`
-		Name           string `json:"name" binding:"required"`
-		ProductID      uint   `json:"product_id" binding:"required"`
-		ProductName    string `json:"product_name" binding:"required"`
+		HomeID          uint   `json:"home_id" binding:"required"`
+		Name            string `json:"name" binding:"required"`
+		ProductID       uint   `json:"product_id" binding:"required"`
+		ProductName     string `json:"product_name" binding:"required"`
 		DevicePublicKey string `json:"device_public_key" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
+		return
+	}
+
+	var err error
+	req.Name, err = validation.ValidateRequiredTrimmed("name", req.Name, 255)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	req.ProductName, err = validation.ValidateRequiredTrimmed("product_name", req.ProductName, 255)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	req.DevicePublicKey, err = validation.ValidateRequiredTrimmed("device_public_key", req.DevicePublicKey, 4096)
+	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}

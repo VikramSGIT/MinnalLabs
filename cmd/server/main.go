@@ -16,6 +16,7 @@ import (
 	"github.com/iot-backend/internal/db"
 	"github.com/iot-backend/internal/enrollment"
 	"github.com/iot-backend/internal/google"
+	"github.com/iot-backend/internal/middleware"
 	"github.com/iot-backend/internal/mqtt"
 	"github.com/iot-backend/internal/oauth"
 	"github.com/iot-backend/internal/ota"
@@ -36,9 +37,12 @@ func main() {
 	mqtt.InitMQTT(cfg)
 	ota.StartWorker(cfg)
 
-	oauth.InitOAuth()
+	oauth.InitOAuth(cfg)
 
 	r := gin.Default()
+	r.MaxMultipartMemory = 10 << 20
+	r.Use(middleware.SecurityHeaders())
+	r.Use(middleware.LimitRequestBody(1 << 20))
 	r.Use(cors.New(cors.Config{
 		AllowOrigins:     cfg.FrontendAllowedOrigins(),
 		AllowMethods:     []string{"GET", "POST", "DELETE", "PUT", "PATCH", "OPTIONS"},
