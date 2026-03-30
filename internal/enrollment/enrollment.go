@@ -394,17 +394,17 @@ func deleteHome(c *gin.Context) {
 			return fmt.Errorf("delete home: %w", err)
 		}
 
-		if home.MQTTUsername != "" {
-			if err := mqtt.CleanupHomeAccess(home.UserID, home.ID, home.MQTTUsername); err != nil {
-				return fmt.Errorf("cleanup mqtt access: %w", err)
-			}
-		}
-
 		return nil
 	}); err != nil {
 		log.Printf("Failed to delete home %d: %v", homeID, err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete home"})
 		return
+	}
+
+	if home.MQTTUsername != "" {
+		if err := mqtt.CleanupHomeAccess(home.UserID, home.ID, home.MQTTUsername); err != nil {
+			log.Printf("Failed to clean up MQTT access for home %d: %v", homeID, err)
+		}
 	}
 
 	for _, device := range devices {

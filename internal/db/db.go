@@ -34,6 +34,11 @@ func InitDB(cfg *config.Config) {
 }
 
 func RunMigrations() {
+	DB.Exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
+		filename VARCHAR(255) PRIMARY KEY,
+		applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+	)`)
+
 	entries, err := os.ReadDir("migrations")
 	if err != nil {
 		log.Fatalf("Failed to read migrations directory: %v", err)
@@ -48,7 +53,15 @@ func RunMigrations() {
 	}
 	sort.Strings(files)
 
+	applied := 0
 	for _, path := range files {
+		name := filepath.Base(path)
+		var count int64
+		DB.Raw("SELECT COUNT(*) FROM schema_migrations WHERE filename = ?", name).Scan(&count)
+		if count > 0 {
+			continue
+		}
+
 		sqlBytes, err := os.ReadFile(path)
 		if err != nil {
 			log.Fatalf("Failed to read migration file %s: %v", path, err)
@@ -56,8 +69,10 @@ func RunMigrations() {
 		if err := DB.Exec(string(sqlBytes)).Error; err != nil {
 			log.Fatalf("Failed to run migration %s: %v", path, err)
 		}
+		DB.Exec("INSERT INTO schema_migrations (filename) VALUES (?)", name)
 		log.Printf("Applied migration %s", path)
+		applied++
 	}
 
-	log.Println("Database migrations completed")
+	log.Printf("Database migrations completed (%d applied, %d already up to date)", applied, len(files)-applied)
 }
