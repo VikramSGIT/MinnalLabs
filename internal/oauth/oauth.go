@@ -2,9 +2,11 @@ package oauth
 
 import (
 	"fmt"
+	"html"
 	"log"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	oautherrors "github.com/go-oauth2/oauth2/v4/errors"
@@ -98,6 +100,14 @@ func userAuthorizeHandler(w http.ResponseWriter, r *http.Request) (userID string
 	return fmt.Sprintf("%d", sessionUser.UserID), nil
 }
 
+func sanitizeRedirect(target string) string {
+	target = strings.TrimSpace(target)
+	if target == "" || !strings.HasPrefix(target, "/") || strings.HasPrefix(target, "//") {
+		return "/"
+	}
+	return target
+}
+
 func authenticateUser(username, password string) (*localmodels.User, error) {
 	var user localmodels.User
 	if err := db.DB.Where("username = ?", username).First(&user).Error; err != nil {
@@ -132,7 +142,7 @@ func SetupOAuthRoutes(r *gin.Engine, cfg *config.Config) {
 			<body>
 				<h2>Login</h2>
 				<form action="/login" method="POST">
-					<input type="hidden" name="redirect" value="` + redirect + `">
+					<input type="hidden" name="redirect" value="` + html.EscapeString(redirect) + `">
 					Username: <input type="text" name="username"><br>
 					Password: <input type="password" name="password"><br>
 					<input type="submit" value="Login">
@@ -154,7 +164,7 @@ func SetupOAuthRoutes(r *gin.Engine, cfg *config.Config) {
 				c.String(http.StatusInternalServerError, "Failed to create session")
 				return
 			}
-			c.Redirect(http.StatusFound, redirect)
+			c.Redirect(http.StatusFound, sanitizeRedirect(redirect))
 			return
 		}
 
