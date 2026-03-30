@@ -29,12 +29,22 @@ static constexpr size_t kEnvelopeHeaderSize = 1 + kKeySize + kNonceSize;
 static constexpr size_t kChunkHeaderSize = 8;
 static constexpr size_t kMaxTransferSize = 2048;
 static constexpr size_t kMaxPlaintextSize = 1024;
+static constexpr size_t kPublicKeyChunkPayloadSize = 14;
+static constexpr size_t kPublicKeyRequestSize = 4;
+static constexpr uint8_t kPublicKeyTransferId = 1;
 static constexpr char kHkdfInfo[] = "iot-provisioning-v1";
 
 enum class ChunkStatus {
   kAccepted,
   kComplete,
   kError,
+};
+
+struct ChunkMetadata {
+  uint8_t transfer_id{0};
+  uint16_t chunk_index{0};
+  uint16_t total_chunks{0};
+  uint16_t total_bytes{0};
 };
 
 struct ProvisioningValues {
@@ -149,6 +159,14 @@ inline bool ensure_rng_ready(std::string &error) {
   return true;
 }
 
+inline bool ensure_key_material_available(std::string &error) {
+  if (!key_material_loaded()) {
+    error = "device key material unavailable";
+    return false;
+  }
+  return true;
+}
+
 inline void reset_transfer_state() {
   transfer_active() = false;
   active_transfer_id() = 0;
@@ -171,6 +189,89 @@ inline void clear_key_cache() {
 
 inline uint16_t read_u16_be(const uint8_t *buf) {
   return static_cast<uint16_t>((static_cast<uint16_t>(buf[0]) << 8) | static_cast<uint16_t>(buf[1]));
+}
+
+inline void append_u16_be(std::vector<uint8_t> &packet, uint16_t value) {
+  packet.push_back(static_cast<uint8_t>((value >> 8) & 0xff));
+  packet.push_back(static_cast<uint8_t>(value & 0xff));
+}
+
+inline uint16_t calculate_total_chunks(size_t total_bytes, size_t payload_size) {
+  if (payload_size == 0 || total_bytes == 0) {
+    return 0;
+  }
+  return static_cast<uint16_t>((total_bytes + payload_size - 1) / payload_size);
+}
+
+inline void append_chunk_header(std::vector<uint8_t> &packet, const ChunkMetadata &metadata) {
+  packet.push_back(kChunkVersion);
+  packet.push_back(metadata.transfer_id);
+  append_u16_be(packet, metadata.chunk_index);
+  append_u16_be(packet, metadata.total_chunks);
+  append_u16_be(packet, metadata.total_bytes);
+}
+
+inline bool parse_chunk_metadata(const std::vector<uint8_t> &packet,
+                                 ChunkMetadata &metadata,
+                                 std::string &error) {
+  if (packet.size() < kChunkHeaderSize) {
+    error = "chunk too short";
+    return false;
+  }
+
+  if (packet[0] != kChunkVersion) {
+    error = "unsupported chunk protocol version";
+    return false;
+  }
+
+  metadata.transfer_id = packet[1];
+  metadata.chunk_index = read_u16_be(packet.data() + 2);
+  metadata.total_chunks = read_u16_be(packet.data() + 4);
+  metadata.total_bytes = read_u16_be(packet.data() + 6);
+  return true;
+}
+
+inline bool build_chunk_packet(const uint8_t *source,
+                               size_t source_len,
+                               size_t payload_size,
+                               uint8_t transfer_id,
+                               uint16_t chunk_index,
+                               std::vector<uint8_t> &packet,
+                               std::string &error) {
+  if (source == nullptr || source_len == 0) {
+    error = "chunk source is empty";
+    return false;
+  }
+  if (source_len > 0xffff) {
+    error = "chunk source exceeds 16-bit protocol size";
+    return false;
+  }
+
+  const uint16_t total_chunks = calculate_total_chunks(source_len, payload_size);
+  if (total_chunks == 0) {
+    error = "chunk source has invalid payload sizing";
+    return false;
+  }
+  if (chunk_index >= total_chunks) {
+    error = "requested chunk is out of range";
+    return false;
+  }
+
+  const size_t start = static_cast<size_t>(chunk_index) * payload_size;
+  const size_t end = std::min(start + payload_size, source_len);
+  const ChunkMetadata metadata{
+      transfer_id,
+      chunk_index,
+      total_chunks,
+      static_cast<uint16_t>(source_len),
+  };
+
+  packet.clear();
+  packet.reserve(kChunkHeaderSize + (end - start));
+  append_chunk_header(packet, metadata);
+  packet.insert(packet.end(), source + static_cast<std::ptrdiff_t>(start),
+                source + static_cast<std::ptrdiff_t>(end));
+  return true;
 }
 
 inline int mpi_read_binary_le_compat(mbedtls_mpi *value, const uint8_t *buf, size_t len) {
@@ -297,6 +398,57 @@ inline std::vector<uint8_t> public_key_bytes() {
   return std::vector<uint8_t>(public_key_bytes_state().begin(), public_key_bytes_state().end());
 }
 
+inline bool build_public_key_chunk(uint16_t chunk_index,
+                                   std::vector<uint8_t> &packet,
+                                   std::string &error) {
+  if (!ensure_key_material_available(error)) {
+    return false;
+  }
+  return build_chunk_packet(public_key_bytes_state().data(),
+                            public_key_bytes_state().size(),
+                            kPublicKeyChunkPayloadSize,
+                            kPublicKeyTransferId,
+                            chunk_index,
+                            packet,
+                            error);
+}
+
+inline bool build_initial_public_key_chunk(std::vector<uint8_t> &packet,
+                                           std::string &error) {
+  return build_public_key_chunk(0, packet, error);
+}
+
+template <typename CharacteristicT>
+inline bool prime_public_key_characteristic(CharacteristicT &characteristic,
+                                            std::string &error) {
+  std::vector<uint8_t> packet;
+  if (!build_initial_public_key_chunk(packet, error)) {
+    return false;
+  }
+  characteristic.set_value(packet);
+  return true;
+}
+
+inline bool handle_public_key_chunk_request(const std::vector<uint8_t> &request,
+                                            std::vector<uint8_t> &packet,
+                                            std::string &error) {
+  if (request.size() != kPublicKeyRequestSize) {
+    error = "public key chunk request must be 4 bytes";
+    return false;
+  }
+  if (request[0] != kChunkVersion) {
+    error = "unsupported public key chunk request version";
+    return false;
+  }
+  if (request[1] != kPublicKeyTransferId) {
+    error = "unexpected public key transfer id";
+    return false;
+  }
+
+  const uint16_t chunk_index = read_u16_be(request.data() + 2);
+  return build_public_key_chunk(chunk_index, packet, error);
+}
+
 inline bool derive_shared_secret(const uint8_t *peer_public_key,
                                  uint8_t *shared_secret,
                                  std::string &error) {
@@ -383,8 +535,7 @@ inline bool hkdf_sha256_32(const uint8_t *ikm,
 inline bool decrypt_envelope(const std::vector<uint8_t> &envelope,
                              std::vector<uint8_t> &plaintext,
                              std::string &error) {
-  if (!key_material_loaded()) {
-    error = "device key material unavailable";
+  if (!ensure_key_material_available(error)) {
     return false;
   }
   if (envelope.size() < kEnvelopeHeaderSize + kGcmTagSize) {
@@ -481,45 +632,35 @@ inline bool parse_plaintext_payload(const std::vector<uint8_t> &plaintext,
 }
 
 inline ChunkStatus ingest_chunk(const std::vector<uint8_t> &packet, std::string &error) {
-  if (!key_material_loaded()) {
+  if (!ensure_key_material_available(error)) {
     error = "secure key material not initialized";
     return ChunkStatus::kError;
   }
-  if (packet.size() < kChunkHeaderSize) {
-    error = "chunk too short";
-    return ChunkStatus::kError;
-  }
-
-  const uint8_t version = packet[0];
-  const uint8_t transfer_id = packet[1];
-  const uint16_t chunk_index = read_u16_be(packet.data() + 2);
-  const uint16_t total_chunks = read_u16_be(packet.data() + 4);
-  const uint16_t total_bytes = read_u16_be(packet.data() + 6);
-  const size_t payload_len = packet.size() - kChunkHeaderSize;
-
-  if (version != kChunkVersion) {
-    error = "unsupported chunk protocol version";
+  ChunkMetadata metadata;
+  if (!parse_chunk_metadata(packet, metadata, error)) {
     reset_transfer_state();
     return ChunkStatus::kError;
   }
-  if (total_chunks == 0 || total_bytes == 0) {
+  const size_t payload_len = packet.size() - kChunkHeaderSize;
+
+  if (metadata.total_chunks == 0 || metadata.total_bytes == 0) {
     error = "invalid chunk metadata";
     reset_transfer_state();
     return ChunkStatus::kError;
   }
-  if (total_bytes > kMaxTransferSize) {
+  if (metadata.total_bytes > kMaxTransferSize) {
     error = "encrypted bundle exceeds supported size";
     reset_transfer_state();
     return ChunkStatus::kError;
   }
-  if (chunk_index >= total_chunks) {
+  if (metadata.chunk_index >= metadata.total_chunks) {
     error = "chunk index out of range";
     reset_transfer_state();
     return ChunkStatus::kError;
   }
 
-  if (!transfer_active() || transfer_id != active_transfer_id()) {
-    if (chunk_index != 0) {
+  if (!transfer_active() || metadata.transfer_id != active_transfer_id()) {
+    if (metadata.chunk_index != 0) {
       error = "received non-initial chunk without active transfer";
       reset_transfer_state();
       return ChunkStatus::kError;
@@ -527,26 +668,26 @@ inline ChunkStatus ingest_chunk(const std::vector<uint8_t> &packet, std::string 
     reset_transfer_state();
     pending_values().clear();
     transfer_active() = true;
-    active_transfer_id() = transfer_id;
+    active_transfer_id() = metadata.transfer_id;
     expected_chunk_index() = 0;
-    expected_total_chunks() = total_chunks;
-    expected_total_bytes() = total_bytes;
-    transfer_buffer().reserve(total_bytes);
+    expected_total_chunks() = metadata.total_chunks;
+    expected_total_bytes() = metadata.total_bytes;
+    transfer_buffer().reserve(metadata.total_bytes);
   }
 
-  if (transfer_id != active_transfer_id() ||
-      total_chunks != expected_total_chunks() ||
-      total_bytes != expected_total_bytes()) {
+  if (metadata.transfer_id != active_transfer_id() ||
+      metadata.total_chunks != expected_total_chunks() ||
+      metadata.total_bytes != expected_total_bytes()) {
     error = "chunk metadata mismatch";
     reset_transfer_state();
     return ChunkStatus::kError;
   }
-  if (chunk_index != expected_chunk_index()) {
+  if (metadata.chunk_index != expected_chunk_index()) {
     error = "chunk order mismatch";
     reset_transfer_state();
     return ChunkStatus::kError;
   }
-  if (transfer_buffer().size() + payload_len > expected_total_bytes()) {
+  if (transfer_buffer().size() + payload_len > metadata.total_bytes) {
     error = "transfer buffer overflow";
     reset_transfer_state();
     return ChunkStatus::kError;

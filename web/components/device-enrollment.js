@@ -14,6 +14,7 @@ const UUIDS = {
   productType: "12345678-1234-1234-1234-000000000001",
   productId: "12345678-1234-1234-1234-00000000000c",
   devicePublicKey: "12345678-1234-1234-1234-00000000000d",
+  devicePublicKeyRequest: "12345678-1234-1234-1234-00000000000f",
   provisioningBlob: "12345678-1234-1234-1234-00000000000e",
   restart: "12345678-1234-1234-1234-00000000000b",
 };
@@ -23,15 +24,34 @@ const MQTT_WAIT_INTERVAL_MS = 2_000;
 const CHUNK_VERSION = 1;
 const CHUNK_HEADER_SIZE = 8;
 const CHUNK_PAYLOAD_SIZE = 120;
+const PUBLIC_KEY_REQUEST_SIZE = 4;
+const DEVICE_PUBLIC_KEY_BYTES = 32;
 
 function sleep(ms) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
+function toUint8Array(bytes) {
+  if (bytes instanceof Uint8Array) {
+    return bytes;
+  }
+  if (bytes instanceof DataView) {
+    return new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  }
+  if (ArrayBuffer.isView(bytes)) {
+    return new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  }
+  if (bytes instanceof ArrayBuffer) {
+    return new Uint8Array(bytes);
+  }
+  throw new Error("Expected bytes from Bluetooth.");
+}
+
 function bytesToBase64(bytes) {
+  const normalized = toUint8Array(bytes);
   let binary = "";
-  for (let i = 0; i < bytes.byteLength; i++) {
-    binary += String.fromCharCode(bytes.getUint8(i));
+  for (let i = 0; i < normalized.byteLength; i++) {
+    binary += String.fromCharCode(normalized[i]);
   }
   return window.btoa(binary);
 }
@@ -48,6 +68,47 @@ function base64ToBytes(b64) {
 function writeUInt16BE(target, offset, value) {
   target[offset] = (value >> 8) & 0xff;
   target[offset + 1] = value & 0xff;
+}
+
+function readUInt16BE(source, offset) {
+  return (source[offset] << 8) | source[offset + 1];
+}
+
+function parseChunkPacket(packetBytes, label) {
+  const packet = toUint8Array(packetBytes);
+  if (packet.length < CHUNK_HEADER_SIZE) {
+    throw new Error(`${label} packet is too short.`);
+  }
+
+  const version = packet[0];
+  const transferId = packet[1];
+  const chunkIndex = readUInt16BE(packet, 2);
+  const totalChunks = readUInt16BE(packet, 4);
+  const totalBytes = readUInt16BE(packet, 6);
+  const payload = packet.subarray(CHUNK_HEADER_SIZE);
+
+  if (version !== CHUNK_VERSION) {
+    throw new Error(`${label} packet has unsupported version ${version}.`);
+  }
+  if (totalChunks === 0) {
+    throw new Error(`${label} packet reported zero chunks.`);
+  }
+  if (chunkIndex >= totalChunks) {
+    throw new Error(`${label} packet has out-of-range chunk index ${chunkIndex}.`);
+  }
+  if (totalBytes === 0) {
+    throw new Error(`${label} packet reported zero bytes.`);
+  }
+
+  return { transferId, chunkIndex, totalChunks, totalBytes, payload };
+}
+
+function buildPublicKeyChunkRequest(transferId, chunkIndex) {
+  const request = new Uint8Array(PUBLIC_KEY_REQUEST_SIZE);
+  request[0] = CHUNK_VERSION;
+  request[1] = transferId;
+  writeUInt16BE(request, 2, chunkIndex);
+  return request;
 }
 
 function buildProvisioningChunks(bundleBytes) {
@@ -93,6 +154,57 @@ async function writeWithResponse(characteristic, bytes) {
     return;
   }
   await characteristic.writeValue(bytes);
+}
+
+async function readChunkedDevicePublicKey(mainService) {
+  let chunkCharacteristic;
+  let requestCharacteristic;
+  try {
+    [chunkCharacteristic, requestCharacteristic] = await Promise.all([
+      mainService.getCharacteristic(UUIDS.devicePublicKey),
+      mainService.getCharacteristic(UUIDS.devicePublicKeyRequest),
+    ]);
+  } catch (_) {
+    throw new Error("Device firmware does not support chunked secure enrollment (missing public key transfer characteristic). Update the firmware first.");
+  }
+
+  const firstChunk = parseChunkPacket(await chunkCharacteristic.readValue(), "Device public key");
+  if (firstChunk.chunkIndex !== 0) {
+    throw new Error("Device public key transfer did not start at chunk 0.");
+  }
+  if (firstChunk.totalBytes !== DEVICE_PUBLIC_KEY_BYTES) {
+    throw new Error(`Device public key must be ${DEVICE_PUBLIC_KEY_BYTES} bytes, got ${firstChunk.totalBytes}.`);
+  }
+
+  const assembled = new Uint8Array(firstChunk.totalBytes);
+  let offset = 0;
+  assembled.set(firstChunk.payload, offset);
+  offset += firstChunk.payload.length;
+
+  for (let chunkIndex = 1; chunkIndex < firstChunk.totalChunks; chunkIndex += 1) {
+    const request = buildPublicKeyChunkRequest(firstChunk.transferId, chunkIndex);
+    await writeWithResponse(requestCharacteristic, request);
+    const packet = parseChunkPacket(await chunkCharacteristic.readValue(), "Device public key");
+
+    if (packet.transferId !== firstChunk.transferId) {
+      throw new Error("Device public key transfer ID changed mid-transfer.");
+    }
+    if (packet.chunkIndex !== chunkIndex) {
+      throw new Error(`Expected device public key chunk ${chunkIndex}, got ${packet.chunkIndex}.`);
+    }
+    if (packet.totalChunks !== firstChunk.totalChunks || packet.totalBytes !== firstChunk.totalBytes) {
+      throw new Error("Device public key transfer metadata changed mid-transfer.");
+    }
+
+    assembled.set(packet.payload, offset);
+    offset += packet.payload.length;
+  }
+
+  if (offset !== firstChunk.totalBytes) {
+    throw new Error(`Device public key transfer incomplete: expected ${firstChunk.totalBytes} bytes, got ${offset}.`);
+  }
+
+  return { bytes: assembled, totalChunks: firstChunk.totalChunks };
 }
 
 function formatTimestamp(value) {
@@ -563,19 +675,10 @@ class DeviceEnrollment extends HTMLElement {
 
       this.log(`Product detected: ${this.productName} (ID ${this.productId})`, "success");
 
-      this.log("Reading device public key...", "info");
-      let pubKeyCharacteristic;
-      try {
-        pubKeyCharacteristic = await this.mainService.getCharacteristic(UUIDS.devicePublicKey);
-      } catch (_) {
-        throw new Error("Device firmware does not support secure enrollment (missing public key characteristic). Update the firmware first.");
-      }
-      const pubKeyValue = await pubKeyCharacteristic.readValue();
-      if (pubKeyValue.byteLength !== 32) {
-        throw new Error(`Device public key must be 32 bytes, got ${pubKeyValue.byteLength}.`);
-      }
-      this.devicePublicKeyB64 = bytesToBase64(pubKeyValue);
-      this.log("Device public key read successfully.", "success");
+      this.log("Reading device public key chunks...", "info");
+      const publicKeyTransfer = await readChunkedDevicePublicKey(this.mainService);
+      this.devicePublicKeyB64 = bytesToBase64(publicKeyTransfer.bytes);
+      this.log(`Device public key read successfully in ${publicKeyTransfer.totalChunks} chunks.`, "success");
 
       this.syncUi();
     } catch (error) {

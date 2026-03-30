@@ -17,10 +17,12 @@ esphome:
           std::string key_error;
           if (!secure_ble::ensure_key_material(id(g_device_private_key_b64), id(g_device_public_key_b64), key_error)) {
             ESP_LOGE("secure_ble", "Failed to initialize device key material: %s", key_error.c_str());
-          } else {
-            id(char_device_public_key).set_value(secure_ble::public_key_bytes());
-            ESP_LOGI("secure_ble", "Secure BLE public key loaded.");
           }
+      - if:
+          condition:
+            lambda: 'return !id(g_device_public_key_b64).empty();'
+          then:
+            - script.execute: prime_public_key_chunk
       - if:
           condition:
             lambda: 'return id(g_wifi_ssid).length() > 0;'
@@ -245,10 +247,11 @@ esp32_ble_server:
     - logger.log: "Dashboard connected!"
     - script.stop: blink_enrollment_led
     - switch.turn_on: user_led
-    - lambda: |-
-        if (!id(g_device_public_key_b64).empty()) {
-          id(char_device_public_key).set_value(secure_ble::public_key_bytes());
-        }
+    - if:
+        condition:
+          lambda: 'return !id(g_device_public_key_b64).empty();'
+        then:
+          - script.execute: prime_public_key_chunk
   on_disconnect:
     - switch.turn_off: user_led
     - if:
@@ -271,6 +274,19 @@ esp32_ble_server:
         - uuid: "12345678-1234-1234-1234-00000000000D"
           id: char_device_public_key
           read: true
+
+        - uuid: "12345678-1234-1234-1234-00000000000F"
+          write: true
+          on_write:
+            - lambda: |-
+                std::vector<uint8_t> key_chunk;
+                std::string error;
+                if (secure_ble::handle_public_key_chunk_request(x, key_chunk, error)) {
+                  id(char_device_public_key).set_value(key_chunk);
+                  ESP_LOGI("secure_ble", "Prepared public key chunk response.");
+                } else {
+                  ESP_LOGW("secure_ble", "Rejected public key chunk request: %s", error.c_str());
+                }
 
         - uuid: "12345678-1234-1234-1234-00000000000E"
           write: true
@@ -335,6 +351,16 @@ switch:
     restore_mode: RESTORE_DEFAULT_OFF
 
 script:
+  - id: prime_public_key_chunk
+    mode: restart
+    then:
+      - lambda: |-
+          std::string key_error;
+          if (secure_ble::prime_public_key_characteristic(id(char_device_public_key), key_error)) {
+            ESP_LOGI("secure_ble", "Secure BLE public key chunk primed.");
+          } else {
+            ESP_LOGW("secure_ble", "Failed to prime public key chunk: %s", key_error.c_str());
+          }
   - id: run_pending_ota
     mode: single
     then:
