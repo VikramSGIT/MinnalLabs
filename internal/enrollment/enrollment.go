@@ -540,14 +540,9 @@ func enrollHome(c *gin.Context) {
 		return
 	}
 
-	mqttHost, mqttPort := cfg.MQTTHostAndPort()
 	c.JSON(http.StatusCreated, gin.H{
-		"home_id":       home.ID,
-		"name":          home.Name,
-		"mqtt_host":     mqttHost,
-		"mqtt_port":     mqttPort,
-		"mqtt_username": home.MQTTUsername,
-		"mqtt_password": home.MQTTPassword,
+		"home_id": home.ID,
+		"name":    home.Name,
 	})
 }
 

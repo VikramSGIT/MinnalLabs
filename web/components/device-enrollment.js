@@ -20,6 +20,9 @@ const UUIDS = {
 
 const MQTT_WAIT_TIMEOUT_MS = 60_000;
 const MQTT_WAIT_INTERVAL_MS = 2_000;
+const CHUNK_VERSION = 1;
+const CHUNK_HEADER_SIZE = 8;
+const CHUNK_PAYLOAD_SIZE = 120;
 
 function sleep(ms) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
@@ -40,6 +43,56 @@ function base64ToBytes(b64) {
     bytes[i] = binary.charCodeAt(i);
   }
   return bytes;
+}
+
+function writeUInt16BE(target, offset, value) {
+  target[offset] = (value >> 8) & 0xff;
+  target[offset + 1] = value & 0xff;
+}
+
+function buildProvisioningChunks(bundleBytes) {
+  if (!(bundleBytes instanceof Uint8Array) || bundleBytes.length === 0) {
+    throw new Error("Encrypted provisioning bundle is empty.");
+  }
+  if (bundleBytes.length > 0xffff) {
+    throw new Error("Encrypted provisioning bundle is too large for BLE transport.");
+  }
+
+  const totalChunks = Math.ceil(bundleBytes.length / CHUNK_PAYLOAD_SIZE);
+  if (totalChunks > 0xffff) {
+    throw new Error("Encrypted provisioning bundle requires too many BLE chunks.");
+  }
+
+  const transferId = window.crypto?.getRandomValues
+    ? window.crypto.getRandomValues(new Uint8Array(1))[0]
+    : Math.floor(Math.random() * 256);
+
+  const packets = [];
+  for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex += 1) {
+    const start = chunkIndex * CHUNK_PAYLOAD_SIZE;
+    const end = Math.min(start + CHUNK_PAYLOAD_SIZE, bundleBytes.length);
+    const payload = bundleBytes.subarray(start, end);
+    const packet = new Uint8Array(CHUNK_HEADER_SIZE + payload.length);
+
+    packet[0] = CHUNK_VERSION;
+    packet[1] = transferId;
+    writeUInt16BE(packet, 2, chunkIndex);
+    writeUInt16BE(packet, 4, totalChunks);
+    writeUInt16BE(packet, 6, bundleBytes.length);
+    packet.set(payload, CHUNK_HEADER_SIZE);
+
+    packets.push(packet);
+  }
+
+  return packets;
+}
+
+async function writeWithResponse(characteristic, bytes) {
+  if (typeof characteristic.writeValueWithResponse === "function") {
+    await characteristic.writeValueWithResponse(bytes);
+    return;
+  }
+  await characteristic.writeValue(bytes);
 }
 
 function formatTimestamp(value) {
@@ -329,7 +382,7 @@ class DeviceEnrollment extends HTMLElement {
       <section class="panel">
         <div>
           <h2>Enroll Device</h2>
-          <p>Read the device identity and public key over Bluetooth, create the backend device record, then write a single encrypted provisioning bundle to the device.</p>
+          <p>Read the device identity and public key over Bluetooth, create the backend device record, then write an encrypted provisioning bundle to the device over secure BLE chunks.</p>
         </div>
 
         <div class="meta">
@@ -368,7 +421,7 @@ class DeviceEnrollment extends HTMLElement {
               <input id="deviceNameInput" type="text" placeholder="Kitchen Sensor" required>
             </label>
           </div>
-          <p class="note">This flow reads the device public key, sends it to the server, and writes a single encrypted provisioning bundle containing all credentials to the device.</p>
+          <p class="note">This flow reads the device public key, sends it to the server, and writes the encrypted provisioning bundle to the device in sequenced BLE chunks.</p>
           <div id="error" class="error" role="alert"></div>
           <div style="margin-top: 18px;">
             <button id="enrollBtn" class="primary" type="button" disabled>Enroll And Provision</button>
@@ -597,9 +650,13 @@ class DeviceEnrollment extends HTMLElement {
 
       this.log("Writing encrypted provisioning bundle to device...", "info");
       const bundleBytes = base64ToBytes(device.provisioning_bundle);
+      const packets = buildProvisioningChunks(bundleBytes);
       const blobCharacteristic = await this.mainService.getCharacteristic(UUIDS.provisioningBlob);
-      await blobCharacteristic.writeValue(bundleBytes);
-      this.log(`Provisioning bundle written (${bundleBytes.length} bytes).`, "success");
+      for (let i = 0; i < packets.length; i += 1) {
+        await writeWithResponse(blobCharacteristic, packets[i]);
+        this.log(`Provisioning chunk ${i + 1}/${packets.length} written (${packets[i].length} bytes).`, "success");
+      }
+      this.log(`Provisioning bundle written (${bundleBytes.length} bytes total).`, "success");
 
       this.log("Triggering save and restart...", "info");
       const restartCharacteristic = await this.mainService.getCharacteristic(UUIDS.restart);
