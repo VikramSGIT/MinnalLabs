@@ -1,7 +1,8 @@
 import http from 'k6/http';
 import encoding from 'k6/encoding';
-import { check, group } from 'k6';
-import { Trend } from 'k6/metrics';
+import { check, group, sleep } from 'k6';
+import execution from 'k6/execution';
+import { Counter, Trend } from 'k6/metrics';
 import { textSummary } from 'https://jslib.k6.io/k6-summary/0.0.4/index.js';
 
 const BASE_URL = stripTrailingSlash(__ENV.BASE_URL || 'http://localhost:8080');
@@ -15,10 +16,26 @@ const DEVICE_PUBLIC_KEY = __ENV.K6_DEVICE_PUBLIC_KEY || 'AQbnaqQshSiDwqVRxeH8lTi
 const DUMMY_FIRMWARE = open('./testdata/dummy.bin', 'b');
 const SUMMARY_PATH = __ENV.K6_SUMMARY_PATH || './artifacts/k6-summary.json';
 const TEST_RUN_ID = __ENV.K6_RUN_ID || `${Date.now()}`;
-const TARGET_VUS = Number(__ENV.K6_VUS || '10');
-const HOLD_DURATION = __ENV.K6_DURATION || '1m';
-const RAMP_UP_DURATION = __ENV.K6_RAMP_UP || '15s';
-const RAMP_DOWN_DURATION = __ENV.K6_RAMP_DOWN || '10s';
+const USER_FLOW_VUS = normalizeIntegerEnv(__ENV.K6_USER_FLOW_VUS, 100, 1);
+const USER_FLOW_ITERATIONS = normalizeIntegerEnv(__ENV.K6_USER_FLOW_ITERATIONS, 100, 1);
+const USER_FLOW_MAX_DURATION = __ENV.K6_USER_FLOW_MAX_DURATION || '20m';
+const HOME_BURST_VUS = normalizeIntegerEnv(__ENV.K6_HOME_BURST_VUS, 100, 0);
+const HOME_BURST_START = __ENV.K6_HOME_BURST_START || '10s';
+const HOME_BURST_ITERATIONS = normalizeIntegerEnv(__ENV.K6_HOME_BURST_ITERATIONS, 1, 1);
+const HOME_BURST_MAX_DURATION = __ENV.K6_HOME_BURST_MAX_DURATION || '20m';
+const FULFILLMENT_PARALLEL_VUS = normalizeIntegerEnv(__ENV.K6_FULFILLMENT_PARALLEL_VUS, 100, 0);
+const FULFILLMENT_PARALLEL_START = __ENV.K6_FULFILLMENT_START || '10s';
+const FULFILLMENT_PARALLEL_ITERATIONS = normalizeIntegerEnv(__ENV.K6_FULFILLMENT_PARALLEL_ITERATIONS, 1000, 1);
+const FULFILLMENT_PARALLEL_MAX_DURATION = __ENV.K6_FULFILLMENT_MAX_DURATION || '10m';
+const DEVICE_STREAM_VUS = normalizeIntegerEnv(__ENV.K6_DEVICE_STREAM_VUS, 10, 0);
+const DEVICE_STREAM_ITERATIONS = normalizeIntegerEnv(__ENV.K6_DEVICE_STREAM_ITERATIONS, 20, 1);
+const DEVICE_STREAM_START = __ENV.K6_DEVICE_STREAM_START || '10s';
+const DEVICE_STREAM_DELETE_START = __ENV.K6_DEVICE_STREAM_DELETE_START || '30s';
+const DEVICE_STREAM_INTERVAL_MS = normalizeNumberEnv(__ENV.K6_DEVICE_STREAM_INTERVAL_MS, 1000, 0);
+const DEVICE_STREAM_MAX_DURATION = __ENV.K6_DEVICE_STREAM_MAX_DURATION || '10m';
+const ASYNC_HOME_READY_TIMEOUT_MS = normalizeNumberEnv(__ENV.ASYNC_HOME_READY_TIMEOUT_MS, 90000, 1000);
+const ASYNC_HOME_READY_POLL_MS = normalizeNumberEnv(__ENV.ASYNC_HOME_READY_POLL_MS, 2000, 250);
+const ASYNC_HOME_EARLY_READY_CHECK_MS = normalizeNumberEnv(__ENV.ASYNC_HOME_EARLY_READY_CHECK_MS, 9000, 0);
 
 const timings = {
   enrollUser: new Trend('api_enroll_user_duration', true),
@@ -29,6 +46,8 @@ const timings = {
   sessionLogout: new Trend('api_session_logout_duration', true),
   enrollHome: new Trend('api_enroll_home_duration', true),
   listHomes: new Trend('api_enroll_homes_duration', true),
+  asyncHomeReady: new Trend('async_home_ready_duration', true),
+  asyncHomeReadyPolls: new Trend('async_home_ready_polls'),
   enrollDevice: new Trend('api_enroll_device_duration', true),
   listHomeDevices: new Trend('api_home_devices_duration', true),
   deviceStatus: new Trend('api_device_status_duration', true),
@@ -47,22 +66,99 @@ const timings = {
   googleDisconnect: new Trend('api_google_disconnect_duration', true),
 };
 
+const asyncCounters = {
+  homeReadySuccess: new Counter('async_home_ready_success'),
+  homeReadyTimeout: new Counter('async_home_ready_timeout'),
+  homeReadyFailedState: new Counter('async_home_ready_failed_state'),
+  homeReadyEarly: new Counter('async_home_ready_early'),
+};
+
 export const options = {
   insecureSkipTLSVerify: true,
-  stages: [
-    { duration: RAMP_UP_DURATION, target: TARGET_VUS },
-    { duration: HOLD_DURATION, target: TARGET_VUS },
-    { duration: RAMP_DOWN_DURATION, target: 0 },
-  ],
+  scenarios: buildScenarios(),
   thresholds: {
     http_req_failed: ['rate<0.10'],
     http_req_duration: ['p(95)<2000'],
+    async_home_ready_timeout: ['count==0'],
+    async_home_ready_failed_state: ['count==0'],
+    async_home_ready_early: ['count==0'],
   },
   summaryTrendStats: ['avg', 'min', 'med', 'p(90)', 'p(95)', 'p(99)', 'max'],
 };
 
 function stripTrailingSlash(value) {
   return value.replace(/\/+$/, '');
+}
+
+function normalizeNumberEnv(rawValue, fallback, minimum) {
+  if (rawValue === undefined || rawValue === null || rawValue === '') {
+    return fallback;
+  }
+  const parsed = Number(rawValue);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return Math.max(minimum, parsed);
+}
+
+function normalizeIntegerEnv(rawValue, fallback, minimum) {
+  return Math.floor(normalizeNumberEnv(rawValue, fallback, minimum));
+}
+
+function buildScenarios() {
+  const scenarios = {
+    user_flow: {
+      executor: 'shared-iterations',
+      exec: 'userFlow',
+      vus: USER_FLOW_VUS,
+      iterations: USER_FLOW_ITERATIONS,
+      maxDuration: USER_FLOW_MAX_DURATION,
+      gracefulStop: '30s',
+    },
+  };
+
+  if (HOME_BURST_VUS > 0) {
+    scenarios.async_home_burst = {
+      executor: 'per-vu-iterations',
+      exec: 'asyncHomeBurst',
+      startTime: HOME_BURST_START,
+      vus: HOME_BURST_VUS,
+      iterations: HOME_BURST_ITERATIONS,
+      maxDuration: HOME_BURST_MAX_DURATION,
+    };
+  }
+
+  if (FULFILLMENT_PARALLEL_VUS > 0) {
+    scenarios.fulfillment_parallel = {
+      executor: 'shared-iterations',
+      exec: 'fulfillmentParallel',
+      startTime: FULFILLMENT_PARALLEL_START,
+      vus: FULFILLMENT_PARALLEL_VUS,
+      iterations: FULFILLMENT_PARALLEL_ITERATIONS,
+      maxDuration: FULFILLMENT_PARALLEL_MAX_DURATION,
+    };
+  }
+
+  if (DEVICE_STREAM_VUS > 0) {
+    scenarios.device_stream_enroll = {
+      executor: 'per-vu-iterations',
+      exec: 'deviceEnrollStream',
+      startTime: DEVICE_STREAM_START,
+      vus: DEVICE_STREAM_VUS,
+      iterations: DEVICE_STREAM_ITERATIONS,
+      maxDuration: DEVICE_STREAM_MAX_DURATION,
+    };
+    scenarios.device_stream_cleanup = {
+      executor: 'per-vu-iterations',
+      exec: 'deviceCleanupStream',
+      startTime: DEVICE_STREAM_DELETE_START,
+      vus: DEVICE_STREAM_VUS,
+      iterations: DEVICE_STREAM_ITERATIONS,
+      maxDuration: DEVICE_STREAM_MAX_DURATION,
+    };
+  }
+
+  return scenarios;
 }
 
 function url(path) {
@@ -182,6 +278,17 @@ function createUserCredentials(prefix) {
   };
 }
 
+function registerUser(credentials) {
+  const name = 'POST /api/enroll/user';
+  const response = http.post(
+    url('/api/enroll/user'),
+    JSON.stringify(credentials),
+    jsonParams(name),
+  );
+  addTiming(timings.enrollUser, response);
+  return expectStatus(response, 201, name);
+}
+
 function loadLoginPage() {
   const name = 'GET /login';
   const response = http.get(
@@ -240,7 +347,7 @@ function loginSession(username, password) {
   };
 }
 
-function logoutSession(sessionToken) {
+function logoutSession(sessionToken, allowUnauthorized = false) {
   const name = 'POST /api/session/logout';
   const response = http.post(
     url('/api/session/logout'),
@@ -250,7 +357,8 @@ function logoutSession(sessionToken) {
     }),
   );
   addTiming(timings.sessionLogout, response);
-  return expectStatus(response, 200, name);
+  const expectedStatus = allowUnauthorized ? [200, 401] : 200;
+  return expectStatus(response, expectedStatus, name);
 }
 
 function listProducts(sessionToken) {
@@ -325,13 +433,145 @@ function listHomes(sessionToken) {
   return { ok, payload };
 }
 
-function enrollDevice(sessionToken, homeID, productID, productName, nameSuffix) {
+function homeProvisionState(home) {
+  return String((home && home.mqtt_provision_state) || '').toLowerCase();
+}
+
+function findHomeByID(homes, homeID) {
+  if (!Array.isArray(homes)) {
+    return null;
+  }
+  return homes.find((homeItem) => Number(homeItem.home_id) === Number(homeID)) || null;
+}
+
+function lookupHome(sessionToken, homeID) {
+  const homes = listHomes(sessionToken);
+  if (!homes.ok || !Array.isArray(homes.payload)) {
+    return { ok: false, home: null };
+  }
+  return {
+    ok: true,
+    home: findHomeByID(homes.payload, homeID),
+  };
+}
+
+function expectHomeNotReadyBeforeDelay(sessionToken, homeID, contextLabel, startedAt) {
+  if (ASYNC_HOME_EARLY_READY_CHECK_MS <= 0) {
+    return true;
+  }
+
+  const elapsed = Date.now() - startedAt;
+  const remaining = ASYNC_HOME_EARLY_READY_CHECK_MS - elapsed;
+  if (remaining > 0) {
+    sleep(remaining / 1000);
+  }
+
+  const lookup = lookupHome(sessionToken, homeID);
+  if (!lookup.ok || !lookup.home) {
+    console.error(`Unable to confirm delayed readiness for ${contextLabel} (home ${homeID})`);
+    return false;
+  }
+
+  const state = homeProvisionState(lookup.home);
+  const ok = state !== 'ready';
+  if (!ok) {
+    asyncCounters.homeReadyEarly.add(1);
+    console.error(
+      `Async home readiness became ready too early for ${contextLabel} (home ${homeID}) before ${ASYNC_HOME_EARLY_READY_CHECK_MS}ms`,
+    );
+  }
+  return expectCondition(ok, 'Async home stayed pending before the 10s queue window elapsed');
+}
+
+function waitForHomeReady(sessionToken, homeID, contextLabel, startedAt = Date.now()) {
+  const deadline = startedAt + ASYNC_HOME_READY_TIMEOUT_MS;
+  let polls = 0;
+  let lastState = '';
+  let lastError = '';
+
+  while (Date.now() <= deadline) {
+    const homes = listHomes(sessionToken);
+    polls += 1;
+
+    if (homes.ok && Array.isArray(homes.payload)) {
+      const home = homes.payload.find((homeItem) => Number(homeItem.home_id) === Number(homeID));
+      if (home) {
+        lastState = homeProvisionState(home);
+        lastError = String(home.mqtt_provision_error || '');
+
+        if (lastState === 'ready') {
+          const elapsed = Date.now() - startedAt;
+          timings.asyncHomeReady.add(elapsed);
+          timings.asyncHomeReadyPolls.add(polls);
+          asyncCounters.homeReadySuccess.add(1);
+          return {
+            ok: true,
+            polls,
+            elapsed,
+            state: lastState,
+          };
+        }
+
+        if (lastState === 'failed' || lastState === 'deleting') {
+          const elapsed = Date.now() - startedAt;
+          timings.asyncHomeReady.add(elapsed);
+          timings.asyncHomeReadyPolls.add(polls);
+          asyncCounters.homeReadyFailedState.add(1);
+          console.error(
+            `Async home readiness failed for ${contextLabel} (home ${homeID}) with state ${lastState}: ${lastError}`,
+          );
+          return {
+            ok: false,
+            polls,
+            elapsed,
+            state: lastState,
+            error: lastError,
+          };
+        }
+      }
+    }
+
+    if (Date.now() + ASYNC_HOME_READY_POLL_MS > deadline) {
+      break;
+    }
+    sleep(ASYNC_HOME_READY_POLL_MS / 1000);
+  }
+
+  const elapsed = Date.now() - startedAt;
+  timings.asyncHomeReady.add(elapsed);
+  timings.asyncHomeReadyPolls.add(polls);
+  asyncCounters.homeReadyTimeout.add(1);
+  console.error(
+    `Async home readiness timed out for ${contextLabel} (home ${homeID}) after ${elapsed}ms; last state=${lastState || 'unknown'} ${lastError}`,
+  );
+  return {
+    ok: false,
+    polls,
+    elapsed,
+    state: lastState || 'timeout',
+    error: lastError,
+  };
+}
+
+function waitForHomeReadyAfterDelay(sessionToken, homeID, contextLabel, startedAt = Date.now()) {
+  if (!expectHomeNotReadyBeforeDelay(sessionToken, homeID, contextLabel, startedAt)) {
+    return {
+      ok: false,
+      polls: 0,
+      elapsed: Date.now() - startedAt,
+      state: 'ready-too-early',
+    };
+  }
+  return waitForHomeReady(sessionToken, homeID, contextLabel, startedAt);
+}
+
+function enrollNamedDevice(sessionToken, homeID, productID, productName, deviceName) {
   const name = 'POST /api/enroll/device';
   const response = http.post(
     url('/api/enroll/device'),
     JSON.stringify({
       home_id: homeID,
-      name: `k6-device-${nameSuffix}`,
+      name: deviceName,
       product_id: productID,
       product_name: productName,
       device_public_key: DEVICE_PUBLIC_KEY,
@@ -351,6 +591,16 @@ function enrollDevice(sessionToken, homeID, productID, productName, nameSuffix) 
   };
 }
 
+function enrollDevice(sessionToken, homeID, productID, productName, nameSuffix) {
+  return enrollNamedDevice(
+    sessionToken,
+    homeID,
+    productID,
+    productName,
+    `k6-device-${nameSuffix}`,
+  );
+}
+
 function listHomeDevices(sessionToken, homeID) {
   const name = 'GET /api/enroll/home/:homeID/devices';
   const response = http.get(
@@ -363,6 +613,27 @@ function listHomeDevices(sessionToken, homeID) {
   const ok = expectStatus(response, 200, name);
   const payload = ok ? parseJSON(response, name) : null;
   return { ok, payload };
+}
+
+function findDeviceByName(devices, deviceName) {
+  if (!Array.isArray(devices)) {
+    return null;
+  }
+  return devices.find((device) => String(device.name || '') === String(deviceName)) || null;
+}
+
+function deviceStreamDeviceName(iterationIndex) {
+  return `k6-stream-device-${TEST_RUN_ID}-${iterationIndex}`;
+}
+
+function paceDeviceStream(iterationsPerVU) {
+  if (DEVICE_STREAM_INTERVAL_MS <= 0) {
+    return;
+  }
+  if (execution.vu.iterationInScenario >= iterationsPerVU - 1) {
+    return;
+  }
+  sleep(DEVICE_STREAM_INTERVAL_MS / 1000);
 }
 
 function getDeviceStatus(sessionToken, deviceID) {
@@ -456,6 +727,53 @@ function deleteDevice(sessionToken, deviceID) {
   );
   addTiming(timings.deleteDevice, response);
   return expectStatus(response, 200, name);
+}
+
+function deleteDeviceByName(sessionToken, homeID, deviceName) {
+  const devices = listHomeDevices(sessionToken, homeID);
+  if (!devices.ok || !Array.isArray(devices.payload)) {
+    return {
+      ok: false,
+      found: false,
+      deviceID: 0,
+    };
+  }
+
+  const device = findDeviceByName(devices.payload, deviceName);
+  if (!device) {
+    return {
+      ok: false,
+      found: false,
+      deviceID: 0,
+    };
+  }
+
+  const deviceID = Number(device.device_id);
+  return {
+    ok: deleteDevice(sessionToken, deviceID),
+    found: true,
+    deviceID,
+  };
+}
+
+function deleteDeviceByNameWithRetry(sessionToken, homeID, deviceName, attempts = 5, intervalMs = 500) {
+  let result = {
+    ok: false,
+    found: false,
+    deviceID: 0,
+  };
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    result = deleteDeviceByName(sessionToken, homeID, deviceName);
+    if (result.ok || result.found) {
+      return result;
+    }
+    if (attempt < attempts - 1 && intervalMs > 0) {
+      sleep(intervalMs / 1000);
+    }
+  }
+
+  return result;
 }
 
 function deleteHome(sessionToken, homeID) {
@@ -576,6 +894,45 @@ function queryParam(location, name) {
   return decodeURIComponent(match[1]);
 }
 
+function syncResponseIncludesDevice(payload, deviceID) {
+  return Boolean(
+    payload &&
+      payload.payload &&
+      Array.isArray(payload.payload.devices) &&
+      payload.payload.devices.some((device) => device.id === deviceID),
+  );
+}
+
+function buildExecutePayload(deviceID, on) {
+  return {
+    commands: [
+      {
+        devices: [{ id: deviceID }],
+        execution: [
+          {
+            command: 'action.devices.commands.OnOff',
+            params: { on },
+          },
+        ],
+      },
+    ],
+  };
+}
+
+function executeResponseSucceeded(payload) {
+  return Boolean(
+    payload &&
+      payload.payload &&
+      Array.isArray(payload.payload.commands) &&
+      payload.payload.commands.some((command) => command.status === 'SUCCESS'),
+  );
+}
+
+function queryResponseSucceeded(payload, deviceID) {
+  const deviceState = payload && payload.payload && payload.payload.devices && payload.payload.devices[deviceID];
+  return Boolean(deviceState && deviceState.status === 'SUCCESS');
+}
+
 function bestEffortCleanup(credentials, deviceID, homeID, adminSessionToken) {
   group('cleanup', () => {
     if (credentials && (deviceID || homeID)) {
@@ -587,11 +944,11 @@ function bestEffortCleanup(credentials, deviceID, homeID, adminSessionToken) {
         if (homeID) {
           deleteHome(cleanupLogin.sessionToken, homeID);
         }
-        logoutSession(cleanupLogin.sessionToken);
+        logoutSession(cleanupLogin.sessionToken, true);
       }
     }
     if (adminSessionToken) {
-      logoutSession(adminSessionToken);
+      logoutSession(adminSessionToken, true);
     }
   });
 }
@@ -621,9 +978,19 @@ export function setup() {
     throw new Error('failed to upload initial firmware during setup');
   }
 
+  const sharedHomeStartedAt = Date.now();
   const home = enrollHome(adminLogin.sessionToken, `oauth-${TEST_RUN_ID}`);
   if (!home.ok) {
     throw new Error('failed to create the shared OAuth home during setup');
+  }
+  const sharedHomeReady = waitForHomeReadyAfterDelay(
+    adminLogin.sessionToken,
+    home.homeID,
+    'setup shared OAuth home',
+    sharedHomeStartedAt,
+  );
+  if (!sharedHomeReady.ok) {
+    throw new Error('shared OAuth home did not become ready asynchronously during setup');
   }
 
   const device = enrollDevice(
@@ -637,7 +1004,40 @@ export function setup() {
     throw new Error('failed to create the shared OAuth device during setup');
   }
 
-  logoutSession(adminLogin.sessionToken);
+  const auth = authorizeCode(adminLogin.sessionToken, uniqueSuffix('setup-state'));
+  if (!auth.ok) {
+    throw new Error('failed to authorize the shared OAuth token during setup');
+  }
+  const tokenResponse = exchangeOAuthToken(auth.code);
+  if (!tokenResponse.ok) {
+    throw new Error('failed to exchange the shared OAuth token during setup');
+  }
+
+  const deviceLoadCredentials = createUserCredentials('device-load');
+  if (!registerUser(deviceLoadCredentials)) {
+    throw new Error('failed to create the shared device-load user during setup');
+  }
+  const deviceLoadLogin = loginSession(deviceLoadCredentials.username, deviceLoadCredentials.password);
+  if (!deviceLoadLogin.ok) {
+    throw new Error('failed to authenticate the shared device-load user during setup');
+  }
+
+  const deviceLoadHomeStartedAt = Date.now();
+  const deviceLoadHome = enrollHome(deviceLoadLogin.sessionToken, `device-load-${TEST_RUN_ID}`);
+  if (!deviceLoadHome.ok) {
+    throw new Error('failed to create the shared device-load home during setup');
+  }
+  const deviceLoadHomeReady = waitForHomeReadyAfterDelay(
+    deviceLoadLogin.sessionToken,
+    deviceLoadHome.homeID,
+    'setup shared device-load home',
+    deviceLoadHomeStartedAt,
+  );
+  if (!deviceLoadHomeReady.ok) {
+    throw new Error('shared device-load home did not become ready asynchronously during setup');
+  }
+
+  logoutSession(adminLogin.sessionToken, true);
 
   return {
     adminUsername: __ENV.K6_ADMIN_USERNAME,
@@ -647,12 +1047,18 @@ export function setup() {
     sharedHomeID: home.homeID,
     sharedDeviceID: device.deviceID,
     sharedPowerID: `${device.deviceID}:power`,
+    sharedAccessToken: tokenResponse.payload.access_token,
+    deviceLoadUsername: deviceLoadCredentials.username,
+    deviceLoadPassword: deviceLoadCredentials.password,
+    deviceLoadSessionToken: deviceLoadLogin.sessionToken,
+    deviceLoadHomeID: deviceLoadHome.homeID,
   };
 }
 
-export default function (setupData) {
+export function userFlow(setupData) {
   const credentials = createUserCredentials('user');
   const runSuffix = uniqueSuffix('flow');
+  const flowIteration = execution.scenario.iterationInTest;
 
   let userSessionToken = '';
   let adminSessionToken = '';
@@ -664,14 +1070,7 @@ export default function (setupData) {
     let shouldContinue = true;
 
     group('register', () => {
-      const name = 'POST /api/enroll/user';
-      const response = http.post(
-        url('/api/enroll/user'),
-        JSON.stringify(credentials),
-        jsonParams(name),
-      );
-      addTiming(timings.enrollUser, response);
-      shouldContinue = expectStatus(response, 201, name);
+      shouldContinue = registerUser(credentials);
     });
     if (!shouldContinue) {
       return;
@@ -721,6 +1120,7 @@ export default function (setupData) {
     }
 
     group('enrollment', () => {
+      const homeStartedAt = Date.now();
       const home = enrollHome(userSessionToken, runSuffix);
       shouldContinue = home.ok;
       if (!shouldContinue) {
@@ -738,6 +1138,17 @@ export default function (setupData) {
         homes.payload.some((homeItem) => Number(homeItem.home_id) === homeID),
         'GET /api/enroll/homes includes the created home',
       );
+      if (!shouldContinue) {
+        return;
+      }
+
+      const asyncReady = waitForHomeReadyAfterDelay(
+        userSessionToken,
+        homeID,
+        `iteration home ${homeID}`,
+        homeStartedAt,
+      );
+      shouldContinue = asyncReady.ok;
       if (!shouldContinue) {
         return;
       }
@@ -856,40 +1267,24 @@ export default function (setupData) {
         return;
       }
       shouldContinue = expectCondition(
-        sync.payload &&
-          sync.payload.payload &&
-          Array.isArray(sync.payload.payload.devices) &&
-          sync.payload.payload.devices.some((device) => device.id === setupData.sharedPowerID),
+        syncResponseIncludesDevice(sync.payload, setupData.sharedPowerID),
         'SYNC response includes the shared device capability',
       );
       if (!shouldContinue) {
         return;
       }
 
-      const execute = googleFulfillment(accessToken, 'action.devices.EXECUTE', {
-        commands: [
-          {
-            devices: [{ id: setupData.sharedPowerID }],
-            execution: [
-              {
-                command: 'action.devices.commands.OnOff',
-                params: {
-                  on: __ITER % 2 === 0,
-                },
-              },
-            ],
-          },
-        ],
-      });
+      const execute = googleFulfillment(
+        accessToken,
+        'action.devices.EXECUTE',
+        buildExecutePayload(setupData.sharedPowerID, flowIteration % 2 === 0),
+      );
       shouldContinue = execute.ok;
       if (!shouldContinue) {
         return;
       }
       shouldContinue = expectCondition(
-        execute.payload &&
-          execute.payload.payload &&
-          Array.isArray(execute.payload.payload.commands) &&
-          execute.payload.payload.commands.some((command) => command.status === 'SUCCESS'),
+        executeResponseSucceeded(execute.payload),
         'EXECUTE response reports success',
       );
       if (!shouldContinue) {
@@ -903,13 +1298,8 @@ export default function (setupData) {
       if (!shouldContinue) {
         return;
       }
-      const deviceState =
-        query.payload &&
-        query.payload.payload &&
-        query.payload.payload.devices &&
-        query.payload.payload.devices[setupData.sharedPowerID];
       shouldContinue = expectCondition(
-        deviceState && deviceState.status === 'SUCCESS',
+        queryResponseSucceeded(query.payload, setupData.sharedPowerID),
         'QUERY response reports success for the shared device capability',
       );
       if (!shouldContinue) {
@@ -923,10 +1313,191 @@ export default function (setupData) {
   }
 }
 
+export function asyncHomeBurst(setupData) {
+  const credentials = createUserCredentials('burst');
+  const runSuffix = uniqueSuffix('burst');
+  let sessionToken = '';
+  let homeID = 0;
+
+  try {
+    let shouldContinue = true;
+
+    group('async_home_burst_register', () => {
+      shouldContinue = registerUser(credentials);
+    });
+    if (!shouldContinue) {
+      return;
+    }
+
+    const login = loginSession(credentials.username, credentials.password);
+    shouldContinue = login.ok;
+    if (!shouldContinue) {
+      return;
+    }
+    sessionToken = login.sessionToken;
+
+    group('async_home_burst', () => {
+      const homeStartedAt = Date.now();
+      const home = enrollHome(sessionToken, runSuffix);
+      shouldContinue = home.ok;
+      if (!shouldContinue) {
+        return;
+      }
+      homeID = home.homeID;
+
+      const homes = listHomes(sessionToken);
+      shouldContinue = homes.ok && Array.isArray(homes.payload);
+      if (!shouldContinue) {
+        console.error('GET /api/enroll/homes did not return an array payload for the async burst');
+        return;
+      }
+      shouldContinue = expectCondition(
+        homes.payload.some((homeItem) => Number(homeItem.home_id) === homeID),
+        'GET /api/enroll/homes includes the async burst home',
+      );
+      if (!shouldContinue) {
+        return;
+      }
+
+      const asyncReady = waitForHomeReadyAfterDelay(
+        sessionToken,
+        homeID,
+        `burst home ${homeID}`,
+        homeStartedAt,
+      );
+      shouldContinue = asyncReady.ok;
+      if (!shouldContinue) {
+        return;
+      }
+
+      shouldContinue = deleteHome(sessionToken, homeID);
+      if (!shouldContinue) {
+        return;
+      }
+      homeID = 0;
+    });
+  } finally {
+    if (sessionToken && homeID) {
+      deleteHome(sessionToken, homeID);
+    }
+    if (sessionToken) {
+      logoutSession(sessionToken, true);
+    }
+  }
+}
+
+export function fulfillmentParallel(setupData) {
+  if (!setupData.sharedAccessToken) {
+    throw new Error('setup did not return a shared access token for fulfillment load');
+  }
+
+  group('fulfillment_parallel', () => {
+    const iteration = execution.scenario.iterationInTest;
+    const mode = iteration % 3;
+
+    if (mode === 0) {
+      const sync = googleFulfillment(setupData.sharedAccessToken, 'action.devices.SYNC', {});
+      if (!sync.ok) {
+        return;
+      }
+      expectCondition(
+        syncResponseIncludesDevice(sync.payload, setupData.sharedPowerID),
+        'Parallel SYNC response includes the shared device capability',
+      );
+      return;
+    }
+
+    if (mode === 1) {
+      const query = googleFulfillment(setupData.sharedAccessToken, 'action.devices.QUERY', {
+        devices: [{ id: setupData.sharedPowerID }],
+      });
+      if (!query.ok) {
+        return;
+      }
+      expectCondition(
+        queryResponseSucceeded(query.payload, setupData.sharedPowerID),
+        'Parallel QUERY response reports success for the shared device capability',
+      );
+      return;
+    }
+
+    const execute = googleFulfillment(
+      setupData.sharedAccessToken,
+      'action.devices.EXECUTE',
+      buildExecutePayload(setupData.sharedPowerID, iteration % 2 === 0),
+    );
+    if (!execute.ok) {
+      return;
+    }
+    expectCondition(
+      executeResponseSucceeded(execute.payload),
+      'Parallel EXECUTE response reports success',
+    );
+  });
+}
+
+export function deviceEnrollStream(setupData) {
+  if (!setupData.deviceLoadSessionToken || !setupData.deviceLoadHomeID) {
+    throw new Error('setup did not return a shared device-load session and home for device stream load');
+  }
+
+  group('device_stream_enroll', () => {
+    const iteration = execution.scenario.iterationInTest;
+    const deviceName = deviceStreamDeviceName(iteration);
+    const device = enrollNamedDevice(
+      setupData.deviceLoadSessionToken,
+      setupData.deviceLoadHomeID,
+      setupData.productID,
+      setupData.productName,
+      deviceName,
+    );
+    if (device.ok) {
+      expectCondition(device.deviceID > 0, 'Device stream enrollment returned a device id');
+    }
+    paceDeviceStream(DEVICE_STREAM_ITERATIONS);
+  });
+}
+
+export function deviceCleanupStream(setupData) {
+  if (!setupData.deviceLoadSessionToken || !setupData.deviceLoadHomeID) {
+    throw new Error('setup did not return a shared device-load session and home for device cleanup load');
+  }
+
+  group('device_stream_cleanup', () => {
+    const iteration = execution.scenario.iterationInTest;
+    const deviceName = deviceStreamDeviceName(iteration);
+    const deleted = deleteDeviceByNameWithRetry(
+      setupData.deviceLoadSessionToken,
+      setupData.deviceLoadHomeID,
+      deviceName,
+    );
+    const found = expectCondition(
+      deleted.found,
+      `Device stream cleanup found ${deviceName}`,
+    );
+    if (found) {
+      expectCondition(deleted.ok, `Device stream cleanup deleted ${deviceName}`);
+    }
+    paceDeviceStream(DEVICE_STREAM_ITERATIONS);
+  });
+}
+
+export default function (setupData) {
+  return userFlow(setupData);
+}
+
 export function teardown(setupData) {
   const adminLogin = loginSession(setupData.adminUsername, setupData.adminPassword);
   if (!adminLogin.ok) {
     return;
+  }
+
+  let deviceLoadSessionToken = setupData.deviceLoadSessionToken || '';
+  if (!deviceLoadSessionToken && setupData.deviceLoadUsername && setupData.deviceLoadPassword) {
+    const deviceLoadLogin = loginSession(setupData.deviceLoadUsername, setupData.deviceLoadPassword);
+    if (deviceLoadLogin.ok) {
+      deviceLoadSessionToken = deviceLoadLogin.sessionToken;
+    }
   }
 
   if (setupData.sharedDeviceID) {
@@ -935,7 +1506,24 @@ export function teardown(setupData) {
   if (setupData.sharedHomeID) {
     deleteHome(adminLogin.sessionToken, setupData.sharedHomeID);
   }
-  logoutSession(adminLogin.sessionToken);
+  if (setupData.deviceLoadHomeID && deviceLoadSessionToken) {
+    const deleted = deleteHome(deviceLoadSessionToken, setupData.deviceLoadHomeID);
+    if (
+      !deleted
+      && setupData.deviceLoadUsername
+      && setupData.deviceLoadPassword
+    ) {
+      const retryLogin = loginSession(setupData.deviceLoadUsername, setupData.deviceLoadPassword);
+      if (retryLogin.ok) {
+        deviceLoadSessionToken = retryLogin.sessionToken;
+        deleteHome(deviceLoadSessionToken, setupData.deviceLoadHomeID);
+      }
+    }
+  }
+  if (deviceLoadSessionToken) {
+    logoutSession(deviceLoadSessionToken, true);
+  }
+  logoutSession(adminLogin.sessionToken, true);
 }
 
 export function handleSummary(data) {

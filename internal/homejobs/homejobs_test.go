@@ -7,6 +7,15 @@ import (
 	"github.com/iot-backend/internal/models"
 )
 
+func TestInitialNextRunAt(t *testing.T) {
+	now := time.Date(2026, time.March, 30, 12, 0, 0, 0, time.UTC)
+	want := now.Add(WorkerInterval)
+
+	if got := initialNextRunAt(now); !got.Equal(want) {
+		t.Fatalf("initialNextRunAt(%s) = %s, want %s", now, got, want)
+	}
+}
+
 func TestRetryDelay(t *testing.T) {
 	cases := []struct {
 		name     string

@@ -20,6 +20,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--raw", required=True)
     parser.add_argument("--report", required=True)
     parser.add_argument("--metadata", required=True)
+    parser.add_argument("--async-jobs", required=True)
     parser.add_argument("--cpu-top", required=True)
     parser.add_argument("--cpu-cum", required=True)
     parser.add_argument("--heap-top", required=True)
@@ -409,6 +410,7 @@ def render_pprof_section(title: str, summary_lines: list[str], rows: list[dict],
 def render_report(args: argparse.Namespace) -> str:
     summary = read_json(args.summary)
     metadata = read_json(args.metadata)
+    async_jobs = read_json(args.async_jobs)
 
     request_series, latency_series, error_series, endpoint_rows, overall_statuses, overall_stats = load_raw_metrics(args.raw)
     cpu_summary_lines, cpu_rows = parse_pprof_table(read_text(args.cpu_top))
@@ -425,6 +427,35 @@ def render_report(args: argparse.Namespace) -> str:
     p95_latency = metric_value(summary, "http_req_duration", "p(95)", overall_stats["p95_latency"])
     p99_latency = metric_value(summary, "http_req_duration", "p(99)", overall_stats["p99_latency"])
     throughput = metric_value(summary, "http_reqs", "rate", overall_stats["throughput"])
+    async_ready_avg = metric_value(summary, "async_home_ready_duration", "avg", 0.0)
+    async_ready_p95 = metric_value(summary, "async_home_ready_duration", "p(95)", 0.0)
+    async_ready_p99 = metric_value(summary, "async_home_ready_duration", "p(99)", 0.0)
+    async_ready_poll_avg = metric_value(summary, "async_home_ready_polls", "avg", 0.0)
+    async_ready_poll_p95 = metric_value(summary, "async_home_ready_polls", "p(95)", 0.0)
+    async_ready_success = int(metric_value(summary, "async_home_ready_success", "count", 0.0))
+    async_ready_timeout = int(metric_value(summary, "async_home_ready_timeout", "count", 0.0))
+    async_ready_failed_state = int(metric_value(summary, "async_home_ready_failed_state", "count", 0.0))
+    async_ready_early = int(metric_value(summary, "async_home_ready_early", "count", 0.0))
+    async_ready_samples = async_ready_success + async_ready_timeout + async_ready_failed_state
+
+    async_completed = bool(async_jobs.get("all_async_jobs_completed"))
+    async_remaining_jobs = int(async_jobs.get("remaining_job_total", 0) or 0)
+    async_remaining_homes = int(async_jobs.get("remaining_home_total", 0) or 0)
+    async_global_jobs = int(async_jobs.get("global_job_total", 0) or 0)
+    async_timed_out = bool(async_jobs.get("timed_out"))
+    async_error = str(async_jobs.get("error", "") or "")
+    async_scope = async_jobs.get("scope", {})
+    async_scope_started = str(async_scope.get("run_started_at", metadata.get("run_started_at", "")) or "")
+    async_captured_at = str(async_jobs.get("captured_at", "") or "")
+    async_drain_wait = async_jobs.get("drain_wait_seconds", metadata.get("async_drain_wait_seconds", ""))
+
+    async_status_message = "All async home jobs drained successfully within the verification window."
+    if not async_jobs:
+        async_status_message = "Async audit artifact was not found."
+    elif not async_completed:
+        async_status_message = "Async work remained after the drain window or the audit encountered an error."
+    if async_error:
+        async_status_message = f"{async_status_message} Audit error: {async_error}"
 
     overview_cards = [
         stat_card("Total requests", format_number(total_requests)),
@@ -433,6 +464,33 @@ def render_report(args: argparse.Namespace) -> str:
         stat_card("p95 latency", format_ms(p95_latency)),
         stat_card("p99 latency", format_ms(p99_latency)),
         stat_card("Throughput", format_rate(throughput)),
+        stat_card(
+            "User flow plan",
+            f'{metadata.get("k6_user_flow_iterations", "0")} runs / {metadata.get("k6_user_flow_vus", "0")} VUs',
+        ),
+        stat_card(
+            "Fulfillment plan",
+            f'{metadata.get("k6_fulfillment_parallel_iterations", "0")} req / {metadata.get("k6_fulfillment_parallel_vus", "0")} VUs',
+        ),
+        stat_card(
+            "Device stream plan",
+            f'{metadata.get("k6_device_stream_vus", "0")} VUs x {metadata.get("k6_device_stream_iterations", "0")} iters',
+        ),
+    ]
+    async_cards = [
+        stat_card("Async drain result", "PASS" if async_completed else "FAIL"),
+        stat_card("Ready samples", format_number(async_ready_samples)),
+        stat_card("Ready avg", format_ms(async_ready_avg)),
+        stat_card("Ready p95", format_ms(async_ready_p95)),
+        stat_card("Ready p99", format_ms(async_ready_p99)),
+        stat_card("Ready success", format_number(async_ready_success)),
+        stat_card("Ready timeouts", format_number(async_ready_timeout)),
+        stat_card("Ready failed-state", format_number(async_ready_failed_state)),
+        stat_card("Early-ready violations", format_number(async_ready_early)),
+        stat_card("Remaining jobs", format_number(async_remaining_jobs)),
+        stat_card("Remaining homes", format_number(async_remaining_homes)),
+        stat_card("Avg polls", format_number(async_ready_poll_avg)),
+        stat_card("Global queue rows", format_number(async_global_jobs)),
     ]
 
     endpoint_table_rows = []
@@ -453,6 +511,55 @@ def render_report(args: argparse.Namespace) -> str:
 
     status_rows = [[escape(status), escape(format_number(count))] for status, count in sorted(overall_statuses.items())]
     goroutine_rows = [[escape(state), escape(format_number(count))] for state, count in goroutine_states.most_common()]
+    async_job_rows = [
+        [
+            escape(str(row.get("operation", ""))),
+            escape(str(row.get("status", ""))),
+            escape(format_number(int(row.get("count", 0) or 0))),
+        ]
+        for row in async_jobs.get("operation_status_counts", [])
+    ]
+    if not async_job_rows:
+        async_job_rows = [[escape("none"), escape("-"), escape("0")]]
+
+    async_home_state_rows = [
+        [escape(state), escape(format_number(int(count or 0)))]
+        for state, count in sorted((async_jobs.get("home_state_counts") or {}).items())
+    ]
+    if not async_home_state_rows:
+        async_home_state_rows = [[escape("none"), escape("0")]]
+
+    active_async_rows = [
+        [
+            escape(str(row.get("id", ""))),
+            escape(str(row.get("home_id", ""))),
+            escape(str(row.get("operation", ""))),
+            escape(str(row.get("status", ""))),
+            escape(format_number(int(row.get("attempts", 0) or 0))),
+            escape(str(row.get("next_run_at", "") or "-")),
+            escape(str(row.get("claimed_at", "") or "-")),
+            escape(str(row.get("last_error", "") or "-")),
+        ]
+        for row in async_jobs.get("active_jobs", [])
+    ]
+    if not active_async_rows:
+        active_async_rows = [[escape("none"), escape("-"), escape("-"), escape("-"), escape("0"), escape("-"), escape("-"), escape("-")]]
+
+    failed_async_rows = [
+        [
+            escape(str(row.get("id", ""))),
+            escape(str(row.get("home_id", ""))),
+            escape(str(row.get("operation", ""))),
+            escape(str(row.get("status", ""))),
+            escape(format_number(int(row.get("attempts", 0) or 0))),
+            escape(str(row.get("next_run_at", "") or "-")),
+            escape(str(row.get("claimed_at", "") or "-")),
+            escape(str(row.get("last_error", "") or "-")),
+        ]
+        for row in async_jobs.get("failed_jobs", [])
+    ]
+    if not failed_async_rows:
+        failed_async_rows = [[escape("none"), escape("-"), escape("-"), escape("-"), escape("0"), escape("-"), escape("-"), escape("-")]]
 
     top_p95_items = [(row["endpoint"], row["p95"]) for row in endpoint_rows[:12]]
     top_avg_items = sorted(
@@ -467,6 +574,7 @@ def render_report(args: argparse.Namespace) -> str:
     k6_links = [
         ('artifacts/k6-summary.json', 'k6 summary JSON'),
         ('artifacts/k6-raw.ndjson', 'k6 raw metrics'),
+        ('artifacts/async-jobs.json', 'async jobs audit'),
         ('pprof/cpu.pb.gz', 'CPU profile'),
         ('pprof/heap.pb.gz', 'heap profile'),
         ('pprof/goroutine.txt', 'goroutine dump'),
@@ -474,6 +582,9 @@ def render_report(args: argparse.Namespace) -> str:
     links_html = "".join(
         f'<li><a href="{escape(path)}">{escape(label)}</a></li>' for path, label in k6_links
     )
+    async_error_html = ""
+    if async_error:
+        async_error_html = f"<pre>{escape(async_error)}</pre>"
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -650,6 +761,21 @@ def render_report(args: argparse.Namespace) -> str:
       margin-top: -8px;
       margin-bottom: 18px;
     }}
+    .status-banner {{
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 14px 16px;
+      margin-bottom: 18px;
+      font-weight: 600;
+    }}
+    .status-banner.ok {{
+      background: rgba(52, 211, 153, 0.12);
+      border-color: rgba(52, 211, 153, 0.34);
+    }}
+    .status-banner.fail {{
+      background: rgba(248, 113, 113, 0.12);
+      border-color: rgba(248, 113, 113, 0.34);
+    }}
   </style>
 </head>
 <body>
@@ -663,8 +789,12 @@ def render_report(args: argparse.Namespace) -> str:
         <div><strong>pprof URL:</strong> {escape(str(metadata.get("pprof_base_url", "")))}</div>
         <div><strong>Firmware host:</strong> {escape(str(metadata.get("caddy_base_url", "")))}</div>
         <div><strong>Product:</strong> {escape(str(metadata.get("k6_product_name", "")))}</div>
-        <div><strong>Load:</strong> {escape(str(metadata.get("k6_vus", "")))} VUs for {escape(str(metadata.get("k6_duration", "")))}</div>
+        <div><strong>User flow:</strong> {escape(str(metadata.get("k6_user_flow_iterations", "")))} runs on {escape(str(metadata.get("k6_user_flow_vus", "")))} VUs</div>
+        <div><strong>Home burst:</strong> {escape(str(metadata.get("k6_home_burst_vus", "")))} VUs x {escape(str(metadata.get("k6_home_burst_iterations", "")))} at {escape(str(metadata.get("k6_home_burst_start", "")))}</div>
+        <div><strong>Fulfillment:</strong> {escape(str(metadata.get("k6_fulfillment_parallel_iterations", "")))} requests on {escape(str(metadata.get("k6_fulfillment_parallel_vus", "")))} VUs at {escape(str(metadata.get("k6_fulfillment_start", "")))}</div>
+        <div><strong>Device stream:</strong> {escape(str(metadata.get("k6_device_stream_vus", "")))} VUs x {escape(str(metadata.get("k6_device_stream_iterations", "")))} at {escape(str(metadata.get("k6_device_stream_start", "")))}; delete at {escape(str(metadata.get("k6_device_stream_delete_start", "")))}</div>
         <div><strong>CPU capture:</strong> {escape(str(metadata.get("pprof_cpu_seconds", "")))}s</div>
+        <div><strong>Async drain:</strong> {escape(str(metadata.get("async_drain_wait_seconds", "")))}s window</div>
       </div>
       <div class="stats-grid">
         {''.join(overview_cards)}
@@ -672,6 +802,39 @@ def render_report(args: argparse.Namespace) -> str:
       <ul class="links-list">
         {links_html}
       </ul>
+    </section>
+
+    <section class="panel">
+      <h2>Async Jobs</h2>
+      <p class="section-intro">Readiness timings come from k6 polling after each home create. Queue drain results come from the post-run PostgreSQL audit scoped to homes and jobs created after {escape(async_scope_started)}.</p>
+      <div class="status-banner {"ok" if async_completed else "fail"}">
+        {escape(async_status_message)}
+      </div>
+      <div class="stats-grid">
+        {''.join(async_cards)}
+      </div>
+      <div class="split-grid">
+        <div>
+          <h3>Remaining jobs by operation and status</h3>
+          {render_table(["Operation", "Status", "Count"], async_job_rows)}
+        </div>
+        <div>
+          <h3>Remaining homes by MQTT state</h3>
+          {render_table(["State", "Count"], async_home_state_rows)}
+        </div>
+      </div>
+      <div class="split-grid">
+        <div>
+          <h3>Active async jobs</h3>
+          {render_table(["Job ID", "Home", "Operation", "Status", "Attempts", "Next run", "Claimed at", "Last error"], active_async_rows)}
+        </div>
+        <div>
+          <h3>Failed async jobs</h3>
+          {render_table(["Job ID", "Home", "Operation", "Status", "Attempts", "Next run", "Claimed at", "Last error"], failed_async_rows)}
+        </div>
+      </div>
+      <p class="section-intro">Audit captured at {escape(async_captured_at or "unknown")} after a {escape(str(async_drain_wait))}s drain window. Average ready polling rounds: {escape(format_number(async_ready_poll_avg))}; p95 polls: {escape(format_number(async_ready_poll_p95))}. Timed out: {escape(str(async_timed_out))}.</p>
+      {async_error_html}
     </section>
 
     <section class="panel">

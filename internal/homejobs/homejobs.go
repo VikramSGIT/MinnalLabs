@@ -16,7 +16,9 @@ import (
 
 const (
 	WorkerInterval                = 10 * time.Second
-	jobBatchSize                  = 8
+	// Process a larger batch each tick so bursty home creation still respects the
+	// 10s queue delay without forcing readiness past the stress-timeout window.
+	jobBatchSize                  = 64
 	staleClaimAfter               = 2 * time.Minute
 	maxProvisionAttempts          = 6
 	DeviceMQTTConnectDelaySeconds = 15
@@ -28,6 +30,10 @@ type Worker struct {
 
 func NewWorker(db *gorm.DB) *Worker {
 	return &Worker{db: db}
+}
+
+func initialNextRunAt(now time.Time) time.Time {
+	return now.Add(WorkerInterval)
 }
 
 func EnqueueProvision(tx *gorm.DB, homeID uint) error {
@@ -43,12 +49,13 @@ func ReplaceWithCleanupJob(tx *gorm.DB, homeID uint) error {
 
 func upsertJob(tx *gorm.DB, homeID uint, operation string) error {
 	now := time.Now().UTC()
+	nextRunAt := initialNextRunAt(now)
 	job := models.HomeMQTTJob{
 		HomeID:    homeID,
 		Operation: operation,
 		Status:    models.HomeMQTTJobStatusPending,
 		Attempts:  0,
-		NextRunAt: now,
+		NextRunAt: nextRunAt,
 		LastError: "",
 	}
 
@@ -60,7 +67,7 @@ func upsertJob(tx *gorm.DB, homeID uint, operation string) error {
 		DoUpdates: clause.Assignments(map[string]interface{}{
 			"status":      models.HomeMQTTJobStatusPending,
 			"attempts":    0,
-			"next_run_at": now,
+			"next_run_at": nextRunAt,
 			"claimed_at":  nil,
 			"last_error":  "",
 			"updated_at":  now,
