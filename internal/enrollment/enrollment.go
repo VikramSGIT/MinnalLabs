@@ -484,12 +484,6 @@ func enrollHome(c *gin.Context) {
 		return
 	}
 
-	var user models.User
-	if err := db.DB.First(&user, sessionUser.UserID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
-		return
-	}
-
 	var (
 		home        models.Home
 		mqttUser    string

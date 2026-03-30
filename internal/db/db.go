@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/iot-backend/internal/config"
 	"gorm.io/driver/postgres"
@@ -29,6 +30,14 @@ func InitDB(cfg *config.Config) {
 	if err != nil {
 		log.Fatalf("Failed to connect to database: %v", err)
 	}
+
+	sqlDB, err := DB.DB()
+	if err != nil {
+		log.Fatalf("Failed to get underlying sql.DB: %v", err)
+	}
+	sqlDB.SetMaxOpenConns(25)
+	sqlDB.SetMaxIdleConns(10)
+	sqlDB.SetConnMaxLifetime(30 * time.Minute)
 
 	log.Println("Connected to database successfully")
 }
