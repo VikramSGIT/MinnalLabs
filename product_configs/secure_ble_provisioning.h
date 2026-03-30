@@ -419,14 +419,25 @@ inline bool build_initial_public_key_chunk(std::vector<uint8_t> &packet,
 }
 
 template <typename CharacteristicT>
+inline bool set_characteristic_packet(CharacteristicT *characteristic,
+                                      std::vector<uint8_t> &&packet,
+                                      std::string &error) {
+  if (characteristic == nullptr) {
+    error = "ble characteristic is unavailable";
+    return false;
+  }
+  characteristic->set_value(std::move(packet));
+  return true;
+}
+
+template <typename CharacteristicT>
 inline bool prime_public_key_characteristic(CharacteristicT &characteristic,
                                             std::string &error) {
   std::vector<uint8_t> packet;
   if (!build_initial_public_key_chunk(packet, error)) {
     return false;
   }
-  characteristic.set_value(packet);
-  return true;
+  return set_characteristic_packet(characteristic, std::move(packet), error);
 }
 
 inline bool handle_public_key_chunk_request(const std::vector<uint8_t> &request,

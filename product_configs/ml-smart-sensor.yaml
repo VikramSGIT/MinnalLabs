@@ -1,5 +1,5 @@
 substitutions:
-  firmware_version: v0.0.5
+  firmware_version: v0.0.7
 
 esphome:
   name: ml-smart-sensor-v1
@@ -282,8 +282,11 @@ esp32_ble_server:
                 std::vector<uint8_t> key_chunk;
                 std::string error;
                 if (secure_ble::handle_public_key_chunk_request(x, key_chunk, error)) {
-                  id(char_device_public_key).set_value(key_chunk);
-                  ESP_LOGI("secure_ble", "Prepared public key chunk response.");
+                  if (secure_ble::set_characteristic_packet(id(char_device_public_key), std::move(key_chunk), error)) {
+                    ESP_LOGI("secure_ble", "Prepared public key chunk response.");
+                  } else {
+                    ESP_LOGW("secure_ble", "Failed to publish public key chunk response: %s", error.c_str());
+                  }
                 } else {
                   ESP_LOGW("secure_ble", "Rejected public key chunk request: %s", error.c_str());
                 }
