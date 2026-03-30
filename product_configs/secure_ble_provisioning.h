@@ -222,21 +222,29 @@ inline bool generate_keypair(std::array<uint8_t, kKeySize> &private_key,
     return false;
   }
 
-  mbedtls_ecdh_context ctx;
-  mbedtls_ecdh_init(&ctx);
+  mbedtls_ecp_group grp;
+  mbedtls_ecp_point public_point;
+  mbedtls_mpi private_mpi;
+  mbedtls_ecp_group_init(&grp);
+  mbedtls_ecp_point_init(&public_point);
+  mbedtls_mpi_init(&private_mpi);
 
-  int ret = mbedtls_ecp_group_load(&ctx.grp, MBEDTLS_ECP_DP_CURVE25519);
+  int ret = mbedtls_ecp_group_load(&grp, MBEDTLS_ECP_DP_CURVE25519);
   if (ret == 0) {
-    ret = mbedtls_ecdh_gen_public(&ctx.grp, &ctx.d, &ctx.Q, mbedtls_ctr_drbg_random, &ctr_drbg_context());
+    ret = mbedtls_ecdh_gen_public(&grp, &private_mpi, &public_point,
+                                  mbedtls_ctr_drbg_random, &ctr_drbg_context());
   }
   if (ret == 0) {
-    ret = mpi_write_binary_le_compat(&ctx.d, private_key.data(), private_key.size());
+    ret = mpi_write_binary_le_compat(&private_mpi, private_key.data(), private_key.size());
   }
   if (ret == 0) {
-    ret = mpi_write_binary_le_compat(&ctx.Q.X, public_key.data(), public_key.size());
+    ret = mpi_write_binary_le_compat(&public_point.MBEDTLS_PRIVATE(X),
+                                     public_key.data(), public_key.size());
   }
 
-  mbedtls_ecdh_free(&ctx);
+  mbedtls_mpi_free(&private_mpi);
+  mbedtls_ecp_point_free(&public_point);
+  mbedtls_ecp_group_free(&grp);
 
   if (ret != 0) {
     error = "failed to generate X25519 keypair";
@@ -297,31 +305,37 @@ inline bool derive_shared_secret(const uint8_t *peer_public_key,
     return false;
   }
 
-  mbedtls_ecdh_context ctx;
-  mbedtls_ecdh_init(&ctx);
+  mbedtls_ecp_group grp;
+  mbedtls_ecp_point peer_point;
+  mbedtls_mpi private_mpi;
   mbedtls_mpi shared;
+  mbedtls_ecp_group_init(&grp);
+  mbedtls_ecp_point_init(&peer_point);
+  mbedtls_mpi_init(&private_mpi);
   mbedtls_mpi_init(&shared);
 
-  int ret = mbedtls_ecp_group_load(&ctx.grp, MBEDTLS_ECP_DP_CURVE25519);
+  int ret = mbedtls_ecp_group_load(&grp, MBEDTLS_ECP_DP_CURVE25519);
   if (ret == 0) {
-    ret = mpi_read_binary_le_compat(&ctx.d, private_key_bytes().data(), private_key_bytes().size());
+    ret = mpi_read_binary_le_compat(&private_mpi, private_key_bytes().data(), private_key_bytes().size());
   }
   if (ret == 0) {
-    ret = mpi_read_binary_le_compat(&ctx.Qp.X, peer_public_key, kKeySize);
+    ret = mpi_read_binary_le_compat(&peer_point.MBEDTLS_PRIVATE(X), peer_public_key, kKeySize);
   }
   if (ret == 0) {
-    ret = mbedtls_mpi_lset(&ctx.Qp.Z, 1);
+    ret = mbedtls_mpi_lset(&peer_point.MBEDTLS_PRIVATE(Z), 1);
   }
   if (ret == 0) {
-    ret = mbedtls_ecdh_compute_shared(&ctx.grp, &shared, &ctx.Qp, &ctx.d,
+    ret = mbedtls_ecdh_compute_shared(&grp, &shared, &peer_point, &private_mpi,
                                       mbedtls_ctr_drbg_random, &ctr_drbg_context());
   }
   if (ret == 0) {
     ret = mpi_write_binary_le_compat(&shared, shared_secret, kKeySize);
   }
 
+  mbedtls_mpi_free(&private_mpi);
+  mbedtls_ecp_point_free(&peer_point);
+  mbedtls_ecp_group_free(&grp);
   mbedtls_mpi_free(&shared);
-  mbedtls_ecdh_free(&ctx);
 
   if (ret != 0) {
     error = "failed to derive shared secret";
