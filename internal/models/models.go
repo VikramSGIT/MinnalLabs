@@ -76,6 +76,7 @@ type Device struct {
 	ProductID       uint           `json:"product_id"`
 	Name            string         `json:"name"`
 	FirmwareVersion string         `gorm:"column:firmware_version" json:"firmware_version"`
+	DevicePublicKey string         `gorm:"column:device_public_key" json:"-"`
 	Product         Product        `gorm:"foreignKey:ProductID" json:"product,omitempty"`
 	Home            Home           `gorm:"foreignKey:HomeID" json:"home,omitempty"`
 }

@@ -13,15 +13,8 @@ const SERVICE_UUID = "12345678-1234-1234-1234-000000000000";
 const UUIDS = {
   productType: "12345678-1234-1234-1234-000000000001",
   productId: "12345678-1234-1234-1234-00000000000c",
-  userId: "12345678-1234-1234-1234-000000000002",
-  deviceId: "12345678-1234-1234-1234-000000000003",
-  mqttHost: "12345678-1234-1234-1234-000000000004",
-  wifiSsid: "12345678-1234-1234-1234-000000000005",
-  wifiPassword: "12345678-1234-1234-1234-000000000006",
-  mqttUsername: "12345678-1234-1234-1234-000000000007",
-  mqttPassword: "12345678-1234-1234-1234-000000000008",
-  mqttPort: "12345678-1234-1234-1234-000000000009",
-  homeId: "12345678-1234-1234-1234-00000000000a",
+  devicePublicKey: "12345678-1234-1234-1234-00000000000d",
+  provisioningBlob: "12345678-1234-1234-1234-00000000000e",
   restart: "12345678-1234-1234-1234-00000000000b",
 };
 
@@ -30,6 +23,23 @@ const MQTT_WAIT_INTERVAL_MS = 2_000;
 
 function sleep(ms) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function bytesToBase64(bytes) {
+  let binary = "";
+  for (let i = 0; i < bytes.byteLength; i++) {
+    binary += String.fromCharCode(bytes.getUint8(i));
+  }
+  return window.btoa(binary);
+}
+
+function base64ToBytes(b64) {
+  const binary = window.atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
 }
 
 function formatTimestamp(value) {
@@ -77,6 +87,7 @@ class DeviceEnrollment extends HTMLElement {
     this.mainService = null;
     this.productName = "";
     this.productId = "";
+    this.devicePublicKeyB64 = "";
     this.isWorking = false;
     this.currentAction = "";
     this.onDisconnected = this.handleDisconnected.bind(this);
@@ -318,7 +329,7 @@ class DeviceEnrollment extends HTMLElement {
       <section class="panel">
         <div>
           <h2>Enroll Device</h2>
-          <p>Read the device product identity over Bluetooth, create the backend device record, then write backend-issued IDs plus Wi-Fi and MQTT settings to the device.</p>
+          <p>Read the device identity and public key over Bluetooth, create the backend device record, then write a single encrypted provisioning bundle to the device.</p>
         </div>
 
         <div class="meta">
@@ -357,7 +368,7 @@ class DeviceEnrollment extends HTMLElement {
               <input id="deviceNameInput" type="text" placeholder="Kitchen Sensor" required>
             </label>
           </div>
-          <p class="note">This flow writes <code>user_id</code>, <code>home_id</code>, <code>device_id</code>, <code>mqtt_host</code>, <code>mqtt_port</code>, Wi-Fi SSID/password, and MQTT username/password to the device.</p>
+          <p class="note">This flow reads the device public key, sends it to the server, and writes a single encrypted provisioning bundle containing all credentials to the device.</p>
           <div id="error" class="error" role="alert"></div>
           <div style="margin-top: 18px;">
             <button id="enrollBtn" class="primary" type="button" disabled>Enroll And Provision</button>
@@ -474,6 +485,7 @@ class DeviceEnrollment extends HTMLElement {
     this.setError("");
     this.productName = "";
     this.productId = "";
+    this.devicePublicKeyB64 = "";
     this.syncUi();
     try {
       this.log("Reading product info from the device...", "info");
@@ -496,18 +508,34 @@ class DeviceEnrollment extends HTMLElement {
         throw new Error("Device reported an empty product ID.");
       }
 
-      this.syncUi();
       this.log(`Product detected: ${this.productName} (ID ${this.productId})`, "success");
+
+      this.log("Reading device public key...", "info");
+      let pubKeyCharacteristic;
+      try {
+        pubKeyCharacteristic = await this.mainService.getCharacteristic(UUIDS.devicePublicKey);
+      } catch (_) {
+        throw new Error("Device firmware does not support secure enrollment (missing public key characteristic). Update the firmware first.");
+      }
+      const pubKeyValue = await pubKeyCharacteristic.readValue();
+      if (pubKeyValue.byteLength !== 32) {
+        throw new Error(`Device public key must be 32 bytes, got ${pubKeyValue.byteLength}.`);
+      }
+      this.devicePublicKeyB64 = bytesToBase64(pubKeyValue);
+      this.log("Device public key read successfully.", "success");
+
+      this.syncUi();
     } catch (error) {
       this.setError(error.message);
       this.syncUi();
-      this.log(`Failed to read product info: ${error.message}`, "error");
+      this.log(`Failed to read device info: ${error.message}`, "error");
     }
   }
 
   handleDisconnected() {
     this.productName = "";
     this.productId = "";
+    this.devicePublicKeyB64 = "";
     this.mainService = null;
     this.gattServer = null;
     this.syncUi();
@@ -530,6 +558,11 @@ class DeviceEnrollment extends HTMLElement {
       return;
     }
 
+    if (!this.devicePublicKeyB64) {
+      this.setError("Device public key was not read. Reconnect and try again.");
+      return;
+    }
+
     const productId = Number.parseInt(this.productId, 10);
     if (Number.isNaN(productId) || productId <= 0) {
       this.setError("The product ID reported by Bluetooth must be a positive integer.");
@@ -542,7 +575,7 @@ class DeviceEnrollment extends HTMLElement {
     this.syncUi();
 
     try {
-      this.log("Creating backend device record...", "info");
+      this.log("Creating backend device record with encrypted provisioning...", "info");
       const device = await postJSON(
         "/api/enroll/device",
         {
@@ -550,6 +583,7 @@ class DeviceEnrollment extends HTMLElement {
           name: deviceName,
           product_id: productId,
           product_name: this.productName,
+          device_public_key: this.devicePublicKeyB64,
         },
         this.apiBaseUrl,
       );
@@ -557,39 +591,20 @@ class DeviceEnrollment extends HTMLElement {
       this.renderSummary(device, deviceName);
       this.log(`Device record created with ID ${device.device_id}.`, "success");
 
-      const fields = [
-        { label: "User ID", uuid: UUIDS.userId, value: String(device.user_id) },
-        { label: "Device ID", uuid: UUIDS.deviceId, value: String(device.device_id) },
-        { label: "MQTT Host", uuid: UUIDS.mqttHost, value: String(device.mqtt_host) },
-        { label: "Wi-Fi SSID", uuid: UUIDS.wifiSsid, value: String(device.wifi_ssid || "") },
-        { label: "Wi-Fi Password", uuid: UUIDS.wifiPassword, value: String(device.wifi_password || "") },
-        { label: "MQTT Username", uuid: UUIDS.mqttUsername, value: String(device.mqtt_username || "") },
-        { label: "MQTT Password", uuid: UUIDS.mqttPassword, value: String(device.mqtt_password || "") },
-        { label: "MQTT Port", uuid: UUIDS.mqttPort, value: String(device.mqtt_port) },
-        { label: "Home ID", uuid: UUIDS.homeId, value: String(device.home_id) },
-      ];
-
-      let writes = 0;
-      for (const field of fields) {
-        if (!field.value) {
-          this.log(`${field.label} skipped because the value is empty.`, "info");
-          continue;
-        }
-
-        const characteristic = await this.mainService.getCharacteristic(field.uuid);
-        await characteristic.writeValue(new TextEncoder().encode(field.value));
-        writes += 1;
-        this.log(`${field.label} written to device.`, "success");
+      if (!device.provisioning_bundle) {
+        throw new Error("Server did not return an encrypted provisioning bundle.");
       }
 
-      if (writes === 0) {
-        throw new Error("Nothing was written to the device.");
-      }
+      this.log("Writing encrypted provisioning bundle to device...", "info");
+      const bundleBytes = base64ToBytes(device.provisioning_bundle);
+      const blobCharacteristic = await this.mainService.getCharacteristic(UUIDS.provisioningBlob);
+      await blobCharacteristic.writeValue(bundleBytes);
+      this.log(`Provisioning bundle written (${bundleBytes.length} bytes).`, "success");
 
       this.log("Triggering save and restart...", "info");
       const restartCharacteristic = await this.mainService.getCharacteristic(UUIDS.restart);
       await restartCharacteristic.writeValue(new TextEncoder().encode("1"));
-      this.log("Provisioning data written. Waiting for the device to reboot and reconnect to MQTT...", "info");
+      this.log("Encrypted provisioning data written. Waiting for the device to reboot and reconnect to MQTT...", "info");
 
       const mqttStatus = await this.waitForDeviceOnline(device.device_id);
       if (!mqttStatus || !mqttStatus.mqtt_connected) {
@@ -653,14 +668,9 @@ class DeviceEnrollment extends HTMLElement {
       ["Product Name", this.productName || "Unknown"],
       ["Product ID", this.productId || "Unknown"],
       ["Device ID", device.device_id],
-      ["User ID", device.user_id],
-      ["Home ID", device.home_id],
-      ["MQTT Host", device.mqtt_host],
-      ["MQTT Port", device.mqtt_port],
+      ["Encrypted", device.provisioning_bundle ? "Yes" : "No"],
       ["MQTT Reconnect", formatReconnectStatus(mqttStatus)],
       ["Last MQTT Seen", formatTimestamp(mqttStatus?.last_seen_at)],
-      ["MQTT Username", device.mqtt_username || "Not set"],
-      ["Wi-Fi SSID", device.wifi_ssid || "Not set"],
     ]
       .map(
         ([label, value]) => `

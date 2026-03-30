@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	devcrypto "github.com/iot-backend/internal/crypto"
 	"github.com/iot-backend/internal/config"
 	"github.com/iot-backend/internal/db"
 	"github.com/iot-backend/internal/models"
@@ -558,13 +559,20 @@ func enrollDevice(c *gin.Context) {
 	}
 
 	var req struct {
-		HomeID      uint   `json:"home_id" binding:"required"`
-		Name        string `json:"name" binding:"required"`
-		ProductID   uint   `json:"product_id" binding:"required"`
-		ProductName string `json:"product_name" binding:"required"`
+		HomeID         uint   `json:"home_id" binding:"required"`
+		Name           string `json:"name" binding:"required"`
+		ProductID      uint   `json:"product_id" binding:"required"`
+		ProductName    string `json:"product_name" binding:"required"`
+		DevicePublicKey string `json:"device_public_key" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	devicePubKey, err := devcrypto.ParseDevicePublicKey(req.DevicePublicKey)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid device public key"})
 		return
 	}
 
@@ -589,10 +597,11 @@ func enrollDevice(c *gin.Context) {
 	}
 
 	device := models.Device{
-		UserID:    sessionUser.UserID,
-		HomeID:    req.HomeID,
-		ProductID: product.ID,
-		Name:      req.Name,
+		UserID:          sessionUser.UserID,
+		HomeID:          req.HomeID,
+		ProductID:       product.ID,
+		Name:            req.Name,
+		DevicePublicKey: req.DevicePublicKey,
 	}
 	if err := db.DB.Create(&device).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create device"})
@@ -607,15 +616,25 @@ func enrollDevice(c *gin.Context) {
 	mqtt.SubscribeDevice(device)
 
 	mqttHost, mqttPort := cfg.MQTTHostAndPort()
+	bundle, err := devcrypto.EncryptProvisioningBundle(devicePubKey, devcrypto.ProvisioningPayload{
+		DeviceID:     fmt.Sprintf("%d", device.ID),
+		UserID:       fmt.Sprintf("%d", sessionUser.UserID),
+		HomeID:       fmt.Sprintf("%d", req.HomeID),
+		MQTTHost:     mqttHost,
+		MQTTPort:     mqttPort,
+		MQTTUsername: home.MQTTUsername,
+		MQTTPassword: home.MQTTPassword,
+		WiFiSSID:     home.WiFiSSID,
+		WiFiPassword: home.WiFiPassword,
+	})
+	if err != nil {
+		log.Printf("Failed to encrypt provisioning bundle for device %d: %v", device.ID, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to encrypt provisioning data"})
+		return
+	}
+
 	c.JSON(http.StatusCreated, gin.H{
-		"device_id":     fmt.Sprintf("%d", device.ID),
-		"user_id":       fmt.Sprintf("%d", sessionUser.UserID),
-		"home_id":       fmt.Sprintf("%d", req.HomeID),
-		"mqtt_host":     mqttHost,
-		"mqtt_port":     mqttPort,
-		"mqtt_username": home.MQTTUsername,
-		"mqtt_password": home.MQTTPassword,
-		"wifi_ssid":     home.WiFiSSID,
-		"wifi_password": home.WiFiPassword,
+		"device_id":           fmt.Sprintf("%d", device.ID),
+		"provisioning_bundle": bundle,
 	})
 }
