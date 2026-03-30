@@ -1,13 +1,6 @@
 import { ApiError, postJSON, requestJSON } from "../lib/api.js";
-
-function escapeHtml(value) {
-  return String(value)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
-}
+import { escapeHtml } from "../lib/html.js";
+import { formatTimestamp } from "../lib/format.js";
 
 const SERVICE_UUID = "12345678-1234-1234-1234-000000000000";
 const UUIDS = {
@@ -205,19 +198,6 @@ async function readChunkedDevicePublicKey(mainService) {
   }
 
   return { bytes: assembled, totalChunks: firstChunk.totalChunks };
-}
-
-function formatTimestamp(value) {
-  if (!value) {
-    return "Not seen yet";
-  }
-
-  const timestamp = new Date(value);
-  if (Number.isNaN(timestamp.getTime())) {
-    return "Not seen yet";
-  }
-
-  return timestamp.toLocaleString();
 }
 
 function formatReconnectStatus(status) {

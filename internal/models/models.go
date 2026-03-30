@@ -51,6 +51,25 @@ type Product struct {
 	ProductCapabilities    []ProductCapability `json:"product_capabilities,omitempty"`
 }
 
+const (
+	DefaultRolloutPercentage      = 20
+	DefaultRolloutIntervalMinutes = 60
+)
+
+func (p Product) EffectiveRolloutPercentage() int {
+	if p.RolloutPercentage >= 1 && p.RolloutPercentage <= 100 {
+		return p.RolloutPercentage
+	}
+	return DefaultRolloutPercentage
+}
+
+func (p Product) EffectiveRolloutIntervalMinutes() int {
+	if p.RolloutIntervalMinutes > 0 {
+		return p.RolloutIntervalMinutes
+	}
+	return DefaultRolloutIntervalMinutes
+}
+
 type Capability struct {
 	ID               uint   `gorm:"primarykey" json:"id"`
 	Component        string `json:"component"`

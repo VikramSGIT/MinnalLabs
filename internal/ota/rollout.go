@@ -65,20 +65,6 @@ type deviceWithSort struct {
 	SortKey string
 }
 
-func effectiveRolloutPercentage(product models.Product) int {
-	if product.RolloutPercentage >= 1 && product.RolloutPercentage <= 100 {
-		return product.RolloutPercentage
-	}
-	return 20
-}
-
-func effectiveRolloutIntervalMinutes(product models.Product) int {
-	if product.RolloutIntervalMinutes > 0 {
-		return product.RolloutIntervalMinutes
-	}
-	return 60
-}
-
 func currentDeviceFirmwareVersion(device models.Device) string {
 	current := strings.TrimSpace(device.FirmwareVersion)
 	if presence, found := state.GetDevicePresence(device.ID); found && strings.TrimSpace(presence.FirmwareVersion) != "" {
@@ -191,8 +177,8 @@ func CreateRollout(product models.Product, createdBy uint) (*models.FirmwareRoll
 	if product.ID == 0 || product.FirmwareVersion == "" || currentProductFirmwareURL(product) == "" || currentProductMD5URL(product) == "" {
 		return nil, 0, 0, fmt.Errorf("product firmware is incomplete")
 	}
-	batchPercentage := effectiveRolloutPercentage(product)
-	batchIntervalMinutes := effectiveRolloutIntervalMinutes(product)
+	batchPercentage := product.EffectiveRolloutPercentage()
+	batchIntervalMinutes := product.EffectiveRolloutIntervalMinutes()
 	if batchPercentage < 1 || batchPercentage > 100 {
 		return nil, 0, 0, fmt.Errorf("batch_percentage must be between 1 and 100")
 	}

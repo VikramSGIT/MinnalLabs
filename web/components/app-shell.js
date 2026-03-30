@@ -1,18 +1,10 @@
 import { getFrontendConfig } from "../lib/config.js";
 import { ApiError, postJSON, requestJSON } from "../lib/api.js";
+import { escapeHtml } from "../lib/html.js";
 import "./admin-firmware-manager.js";
 import "./home-device-manager.js";
 import "./home-create-form.js";
 import "./login-form.js";
-
-function escapeHtml(value) {
-  return String(value)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
-}
 
 class AppShell extends HTMLElement {
   constructor() {
