@@ -332,7 +332,8 @@ func triggerDeviceUpdate(c *gin.Context) {
 		otaURL,
 		md5URL,
 	); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Printf("Failed to publish firmware update for device %d: %v", device.ID, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to queue firmware update"})
 		return
 	}
 	ota.MarkDeviceRolloutSent(device.ID)
@@ -401,7 +402,8 @@ func deleteHome(c *gin.Context) {
 
 		return nil
 	}); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Printf("Failed to delete home %d: %v", homeID, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete home"})
 		return
 	}
 
@@ -538,7 +540,8 @@ func enrollHome(c *gin.Context) {
 				log.Printf("Failed to clean up mqtt access for home %d: %v", home.ID, cleanupErr)
 			}
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Printf("Failed to create home: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create home"})
 		return
 	}
 

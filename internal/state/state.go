@@ -119,6 +119,30 @@ func SyncProductCaps() {
 	log.Printf("Synced product caps: %d products", len(grouped))
 }
 
+// SyncDevices loads all non-deleted device metadata from PostgreSQL into
+// Valkey so that MQTT subscriptions and Google SYNC work after a cold start
+// or Valkey data loss.
+func SyncDevices() {
+	var devices []models.Device
+	if err := gdb.Select("id, user_id, home_id, product_id").
+		Where("deleted_at IS NULL").
+		Find(&devices).Error; err != nil {
+		log.Printf("Failed to sync devices from database: %v", err)
+		return
+	}
+
+	for _, d := range devices {
+		CacheDevice(DeviceInfo{
+			ID:        d.ID,
+			UserID:    d.UserID,
+			HomeID:    d.HomeID,
+			ProductID: d.ProductID,
+		})
+	}
+
+	log.Printf("Synced devices: %d devices cached", len(devices))
+}
+
 // StartSync runs SyncProductCaps every 5 minutes.
 func StartSync() {
 	go func() {

@@ -25,6 +25,7 @@ func main() {
 
 	state.InitState(cfg, db.DB)
 	state.SyncProductCaps()
+	state.SyncDevices()
 	state.StartSync()
 
 	mqtt.InitMQTT(cfg)

@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -287,7 +288,8 @@ func rolloutFirmware(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Printf("Failed to create rollout for product %d: %v", productID, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create rollout"})
 		return
 	}
 
