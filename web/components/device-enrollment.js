@@ -1,48 +1,203 @@
 import { ApiError, postJSON, requestJSON } from "../lib/api.js";
-
-function escapeHtml(value) {
-  return String(value)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
-}
+import { escapeHtml } from "../lib/html.js";
+import { formatTimestamp } from "../lib/format.js";
 
 const SERVICE_UUID = "12345678-1234-1234-1234-000000000000";
 const UUIDS = {
   productType: "12345678-1234-1234-1234-000000000001",
   productId: "12345678-1234-1234-1234-00000000000c",
-  userId: "12345678-1234-1234-1234-000000000002",
-  deviceId: "12345678-1234-1234-1234-000000000003",
-  mqttHost: "12345678-1234-1234-1234-000000000004",
-  wifiSsid: "12345678-1234-1234-1234-000000000005",
-  wifiPassword: "12345678-1234-1234-1234-000000000006",
-  mqttUsername: "12345678-1234-1234-1234-000000000007",
-  mqttPassword: "12345678-1234-1234-1234-000000000008",
-  mqttPort: "12345678-1234-1234-1234-000000000009",
-  homeId: "12345678-1234-1234-1234-00000000000a",
+  devicePublicKey: "12345678-1234-1234-1234-00000000000d",
+  devicePublicKeyRequest: "12345678-1234-1234-1234-00000000000f",
+  provisioningBlob: "12345678-1234-1234-1234-00000000000e",
   restart: "12345678-1234-1234-1234-00000000000b",
 };
 
 const MQTT_WAIT_TIMEOUT_MS = 60_000;
 const MQTT_WAIT_INTERVAL_MS = 2_000;
+const CHUNK_VERSION = 1;
+const CHUNK_HEADER_SIZE = 8;
+const CHUNK_PAYLOAD_SIZE = 120;
+const PUBLIC_KEY_REQUEST_SIZE = 4;
+const DEVICE_PUBLIC_KEY_BYTES = 32;
 
 function sleep(ms) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
-function formatTimestamp(value) {
-  if (!value) {
-    return "Not seen yet";
+function toUint8Array(bytes) {
+  if (bytes instanceof Uint8Array) {
+    return bytes;
+  }
+  if (bytes instanceof DataView) {
+    return new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  }
+  if (ArrayBuffer.isView(bytes)) {
+    return new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  }
+  if (bytes instanceof ArrayBuffer) {
+    return new Uint8Array(bytes);
+  }
+  throw new Error("Expected bytes from Bluetooth.");
+}
+
+function bytesToBase64(bytes) {
+  const normalized = toUint8Array(bytes);
+  let binary = "";
+  for (let i = 0; i < normalized.byteLength; i++) {
+    binary += String.fromCharCode(normalized[i]);
+  }
+  return window.btoa(binary);
+}
+
+function base64ToBytes(b64) {
+  const binary = window.atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
+function writeUInt16BE(target, offset, value) {
+  target[offset] = (value >> 8) & 0xff;
+  target[offset + 1] = value & 0xff;
+}
+
+function readUInt16BE(source, offset) {
+  return (source[offset] << 8) | source[offset + 1];
+}
+
+function parseChunkPacket(packetBytes, label) {
+  const packet = toUint8Array(packetBytes);
+  if (packet.length < CHUNK_HEADER_SIZE) {
+    throw new Error(`${label} packet is too short.`);
   }
 
-  const timestamp = new Date(value);
-  if (Number.isNaN(timestamp.getTime())) {
-    return "Not seen yet";
+  const version = packet[0];
+  const transferId = packet[1];
+  const chunkIndex = readUInt16BE(packet, 2);
+  const totalChunks = readUInt16BE(packet, 4);
+  const totalBytes = readUInt16BE(packet, 6);
+  const payload = packet.subarray(CHUNK_HEADER_SIZE);
+
+  if (version !== CHUNK_VERSION) {
+    throw new Error(`${label} packet has unsupported version ${version}.`);
+  }
+  if (totalChunks === 0) {
+    throw new Error(`${label} packet reported zero chunks.`);
+  }
+  if (chunkIndex >= totalChunks) {
+    throw new Error(`${label} packet has out-of-range chunk index ${chunkIndex}.`);
+  }
+  if (totalBytes === 0) {
+    throw new Error(`${label} packet reported zero bytes.`);
   }
 
-  return timestamp.toLocaleString();
+  return { transferId, chunkIndex, totalChunks, totalBytes, payload };
+}
+
+function buildPublicKeyChunkRequest(transferId, chunkIndex) {
+  const request = new Uint8Array(PUBLIC_KEY_REQUEST_SIZE);
+  request[0] = CHUNK_VERSION;
+  request[1] = transferId;
+  writeUInt16BE(request, 2, chunkIndex);
+  return request;
+}
+
+function buildProvisioningChunks(bundleBytes) {
+  if (!(bundleBytes instanceof Uint8Array) || bundleBytes.length === 0) {
+    throw new Error("Encrypted provisioning bundle is empty.");
+  }
+  if (bundleBytes.length > 0xffff) {
+    throw new Error("Encrypted provisioning bundle is too large for BLE transport.");
+  }
+
+  const totalChunks = Math.ceil(bundleBytes.length / CHUNK_PAYLOAD_SIZE);
+  if (totalChunks > 0xffff) {
+    throw new Error("Encrypted provisioning bundle requires too many BLE chunks.");
+  }
+
+  const transferId = window.crypto?.getRandomValues
+    ? window.crypto.getRandomValues(new Uint8Array(1))[0]
+    : Math.floor(Math.random() * 256);
+
+  const packets = [];
+  for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex += 1) {
+    const start = chunkIndex * CHUNK_PAYLOAD_SIZE;
+    const end = Math.min(start + CHUNK_PAYLOAD_SIZE, bundleBytes.length);
+    const payload = bundleBytes.subarray(start, end);
+    const packet = new Uint8Array(CHUNK_HEADER_SIZE + payload.length);
+
+    packet[0] = CHUNK_VERSION;
+    packet[1] = transferId;
+    writeUInt16BE(packet, 2, chunkIndex);
+    writeUInt16BE(packet, 4, totalChunks);
+    writeUInt16BE(packet, 6, bundleBytes.length);
+    packet.set(payload, CHUNK_HEADER_SIZE);
+
+    packets.push(packet);
+  }
+
+  return packets;
+}
+
+async function writeWithResponse(characteristic, bytes) {
+  if (typeof characteristic.writeValueWithResponse === "function") {
+    await characteristic.writeValueWithResponse(bytes);
+    return;
+  }
+  await characteristic.writeValue(bytes);
+}
+
+async function readChunkedDevicePublicKey(mainService) {
+  let chunkCharacteristic;
+  let requestCharacteristic;
+  try {
+    [chunkCharacteristic, requestCharacteristic] = await Promise.all([
+      mainService.getCharacteristic(UUIDS.devicePublicKey),
+      mainService.getCharacteristic(UUIDS.devicePublicKeyRequest),
+    ]);
+  } catch (_) {
+    throw new Error("Device firmware does not support chunked secure enrollment (missing public key transfer characteristic). Update the firmware first.");
+  }
+
+  const firstChunk = parseChunkPacket(await chunkCharacteristic.readValue(), "Device public key");
+  if (firstChunk.chunkIndex !== 0) {
+    throw new Error("Device public key transfer did not start at chunk 0.");
+  }
+  if (firstChunk.totalBytes !== DEVICE_PUBLIC_KEY_BYTES) {
+    throw new Error(`Device public key must be ${DEVICE_PUBLIC_KEY_BYTES} bytes, got ${firstChunk.totalBytes}.`);
+  }
+
+  const assembled = new Uint8Array(firstChunk.totalBytes);
+  let offset = 0;
+  assembled.set(firstChunk.payload, offset);
+  offset += firstChunk.payload.length;
+
+  for (let chunkIndex = 1; chunkIndex < firstChunk.totalChunks; chunkIndex += 1) {
+    const request = buildPublicKeyChunkRequest(firstChunk.transferId, chunkIndex);
+    await writeWithResponse(requestCharacteristic, request);
+    const packet = parseChunkPacket(await chunkCharacteristic.readValue(), "Device public key");
+
+    if (packet.transferId !== firstChunk.transferId) {
+      throw new Error("Device public key transfer ID changed mid-transfer.");
+    }
+    if (packet.chunkIndex !== chunkIndex) {
+      throw new Error(`Expected device public key chunk ${chunkIndex}, got ${packet.chunkIndex}.`);
+    }
+    if (packet.totalChunks !== firstChunk.totalChunks || packet.totalBytes !== firstChunk.totalBytes) {
+      throw new Error("Device public key transfer metadata changed mid-transfer.");
+    }
+
+    assembled.set(packet.payload, offset);
+    offset += packet.payload.length;
+  }
+
+  if (offset !== firstChunk.totalBytes) {
+    throw new Error(`Device public key transfer incomplete: expected ${firstChunk.totalBytes} bytes, got ${offset}.`);
+  }
+
+  return { bytes: assembled, totalChunks: firstChunk.totalChunks };
 }
 
 function formatReconnectStatus(status) {
@@ -77,6 +232,7 @@ class DeviceEnrollment extends HTMLElement {
     this.mainService = null;
     this.productName = "";
     this.productId = "";
+    this.devicePublicKeyB64 = "";
     this.isWorking = false;
     this.currentAction = "";
     this.onDisconnected = this.handleDisconnected.bind(this);
@@ -318,7 +474,7 @@ class DeviceEnrollment extends HTMLElement {
       <section class="panel">
         <div>
           <h2>Enroll Device</h2>
-          <p>Read the device product identity over Bluetooth, create the backend device record, then write backend-issued IDs plus Wi-Fi and MQTT settings to the device.</p>
+          <p>Read the device identity and public key over Bluetooth, create the backend device record, then write an encrypted provisioning bundle to the device over secure BLE chunks.</p>
         </div>
 
         <div class="meta">
@@ -357,7 +513,7 @@ class DeviceEnrollment extends HTMLElement {
               <input id="deviceNameInput" type="text" placeholder="Kitchen Sensor" required>
             </label>
           </div>
-          <p class="note">This flow writes <code>user_id</code>, <code>home_id</code>, <code>device_id</code>, <code>mqtt_host</code>, <code>mqtt_port</code>, Wi-Fi SSID/password, and MQTT username/password to the device.</p>
+          <p class="note">This flow reads the device public key, sends it to the server, and writes the encrypted provisioning bundle to the device in sequenced BLE chunks.</p>
           <div id="error" class="error" role="alert"></div>
           <div style="margin-top: 18px;">
             <button id="enrollBtn" class="primary" type="button" disabled>Enroll And Provision</button>
@@ -474,6 +630,7 @@ class DeviceEnrollment extends HTMLElement {
     this.setError("");
     this.productName = "";
     this.productId = "";
+    this.devicePublicKeyB64 = "";
     this.syncUi();
     try {
       this.log("Reading product info from the device...", "info");
@@ -496,18 +653,25 @@ class DeviceEnrollment extends HTMLElement {
         throw new Error("Device reported an empty product ID.");
       }
 
-      this.syncUi();
       this.log(`Product detected: ${this.productName} (ID ${this.productId})`, "success");
+
+      this.log("Reading device public key chunks...", "info");
+      const publicKeyTransfer = await readChunkedDevicePublicKey(this.mainService);
+      this.devicePublicKeyB64 = bytesToBase64(publicKeyTransfer.bytes);
+      this.log(`Device public key read successfully in ${publicKeyTransfer.totalChunks} chunks.`, "success");
+
+      this.syncUi();
     } catch (error) {
       this.setError(error.message);
       this.syncUi();
-      this.log(`Failed to read product info: ${error.message}`, "error");
+      this.log(`Failed to read device info: ${error.message}`, "error");
     }
   }
 
   handleDisconnected() {
     this.productName = "";
     this.productId = "";
+    this.devicePublicKeyB64 = "";
     this.mainService = null;
     this.gattServer = null;
     this.syncUi();
@@ -530,6 +694,11 @@ class DeviceEnrollment extends HTMLElement {
       return;
     }
 
+    if (!this.devicePublicKeyB64) {
+      this.setError("Device public key was not read. Reconnect and try again.");
+      return;
+    }
+
     const productId = Number.parseInt(this.productId, 10);
     if (Number.isNaN(productId) || productId <= 0) {
       this.setError("The product ID reported by Bluetooth must be a positive integer.");
@@ -542,7 +711,7 @@ class DeviceEnrollment extends HTMLElement {
     this.syncUi();
 
     try {
-      this.log("Creating backend device record...", "info");
+      this.log("Creating backend device record with encrypted provisioning...", "info");
       const device = await postJSON(
         "/api/enroll/device",
         {
@@ -550,6 +719,7 @@ class DeviceEnrollment extends HTMLElement {
           name: deviceName,
           product_id: productId,
           product_name: this.productName,
+          device_public_key: this.devicePublicKeyB64,
         },
         this.apiBaseUrl,
       );
@@ -557,39 +727,24 @@ class DeviceEnrollment extends HTMLElement {
       this.renderSummary(device, deviceName);
       this.log(`Device record created with ID ${device.device_id}.`, "success");
 
-      const fields = [
-        { label: "User ID", uuid: UUIDS.userId, value: String(device.user_id) },
-        { label: "Device ID", uuid: UUIDS.deviceId, value: String(device.device_id) },
-        { label: "MQTT Host", uuid: UUIDS.mqttHost, value: String(device.mqtt_host) },
-        { label: "Wi-Fi SSID", uuid: UUIDS.wifiSsid, value: String(device.wifi_ssid || "") },
-        { label: "Wi-Fi Password", uuid: UUIDS.wifiPassword, value: String(device.wifi_password || "") },
-        { label: "MQTT Username", uuid: UUIDS.mqttUsername, value: String(device.mqtt_username || "") },
-        { label: "MQTT Password", uuid: UUIDS.mqttPassword, value: String(device.mqtt_password || "") },
-        { label: "MQTT Port", uuid: UUIDS.mqttPort, value: String(device.mqtt_port) },
-        { label: "Home ID", uuid: UUIDS.homeId, value: String(device.home_id) },
-      ];
-
-      let writes = 0;
-      for (const field of fields) {
-        if (!field.value) {
-          this.log(`${field.label} skipped because the value is empty.`, "info");
-          continue;
-        }
-
-        const characteristic = await this.mainService.getCharacteristic(field.uuid);
-        await characteristic.writeValue(new TextEncoder().encode(field.value));
-        writes += 1;
-        this.log(`${field.label} written to device.`, "success");
+      if (!device.provisioning_bundle) {
+        throw new Error("Server did not return an encrypted provisioning bundle.");
       }
 
-      if (writes === 0) {
-        throw new Error("Nothing was written to the device.");
+      this.log("Writing encrypted provisioning bundle to device...", "info");
+      const bundleBytes = base64ToBytes(device.provisioning_bundle);
+      const packets = buildProvisioningChunks(bundleBytes);
+      const blobCharacteristic = await this.mainService.getCharacteristic(UUIDS.provisioningBlob);
+      for (let i = 0; i < packets.length; i += 1) {
+        await writeWithResponse(blobCharacteristic, packets[i]);
+        this.log(`Provisioning chunk ${i + 1}/${packets.length} written (${packets[i].length} bytes).`, "success");
       }
+      this.log(`Provisioning bundle written (${bundleBytes.length} bytes total).`, "success");
 
       this.log("Triggering save and restart...", "info");
       const restartCharacteristic = await this.mainService.getCharacteristic(UUIDS.restart);
       await restartCharacteristic.writeValue(new TextEncoder().encode("1"));
-      this.log("Provisioning data written. Waiting for the device to reboot and reconnect to MQTT...", "info");
+      this.log("Encrypted provisioning data written. Waiting for the device to reboot and reconnect to MQTT...", "info");
 
       const mqttStatus = await this.waitForDeviceOnline(device.device_id);
       if (!mqttStatus || !mqttStatus.mqtt_connected) {
@@ -653,14 +808,9 @@ class DeviceEnrollment extends HTMLElement {
       ["Product Name", this.productName || "Unknown"],
       ["Product ID", this.productId || "Unknown"],
       ["Device ID", device.device_id],
-      ["User ID", device.user_id],
-      ["Home ID", device.home_id],
-      ["MQTT Host", device.mqtt_host],
-      ["MQTT Port", device.mqtt_port],
+      ["Encrypted", device.provisioning_bundle ? "Yes" : "No"],
       ["MQTT Reconnect", formatReconnectStatus(mqttStatus)],
       ["Last MQTT Seen", formatTimestamp(mqttStatus?.last_seen_at)],
-      ["MQTT Username", device.mqtt_username || "Not set"],
-      ["Wi-Fi SSID", device.wifi_ssid || "Not set"],
     ]
       .map(
         ([label, value]) => `

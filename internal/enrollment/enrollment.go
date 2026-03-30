@@ -12,12 +12,14 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/iot-backend/internal/config"
+	devcrypto "github.com/iot-backend/internal/crypto"
 	"github.com/iot-backend/internal/db"
 	"github.com/iot-backend/internal/models"
 	"github.com/iot-backend/internal/mqtt"
 	"github.com/iot-backend/internal/oauth"
 	"github.com/iot-backend/internal/ota"
 	"github.com/iot-backend/internal/state"
+	"github.com/iot-backend/internal/validation"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 )
@@ -70,6 +72,16 @@ func enrollUser(c *gin.Context) {
 		Password string `json:"password" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
+		return
+	}
+
+	req.Username = validation.NormalizeUsername(req.Username)
+	if err := validation.ValidateUsername(req.Username); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := validation.ValidatePassword(req.Password); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -332,7 +344,8 @@ func triggerDeviceUpdate(c *gin.Context) {
 		otaURL,
 		md5URL,
 	); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Printf("Failed to publish firmware update for device %d: %v", device.ID, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to queue firmware update"})
 		return
 	}
 	ota.MarkDeviceRolloutSent(device.ID)
@@ -393,16 +406,17 @@ func deleteHome(c *gin.Context) {
 			return fmt.Errorf("delete home: %w", err)
 		}
 
-		if home.MQTTUsername != "" {
-			if err := mqtt.CleanupHomeAccess(home.UserID, home.ID, home.MQTTUsername); err != nil {
-				return fmt.Errorf("cleanup mqtt access: %w", err)
-			}
-		}
-
 		return nil
 	}); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Printf("Failed to delete home %d: %v", homeID, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete home"})
 		return
+	}
+
+	if home.MQTTUsername != "" {
+		if err := mqtt.CleanupHomeAccess(home.UserID, home.ID, home.MQTTUsername); err != nil {
+			log.Printf("Failed to clean up MQTT access for home %d: %v", homeID, err)
+		}
 	}
 
 	for _, device := range devices {
@@ -478,13 +492,23 @@ func enrollHome(c *gin.Context) {
 		WiFiPassword string `json:"wifi_password"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
 		return
 	}
 
-	var user models.User
-	if err := db.DB.First(&user, sessionUser.UserID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
+	var err error
+	req.Name, err = validation.ValidateRequiredTrimmed("name", req.Name, 255)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	req.WiFiSSID, err = validation.ValidateOptionalTrimmed("wifi_ssid", req.WiFiSSID, 255)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if len(req.WiFiPassword) > 255 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "wifi_password must be at most 255 characters"})
 		return
 	}
 
@@ -495,7 +519,7 @@ func enrollHome(c *gin.Context) {
 		provisioned bool
 	)
 
-	err := db.DB.Transaction(func(tx *gorm.DB) error {
+	err = db.DB.Transaction(func(tx *gorm.DB) error {
 		home = models.Home{
 			UserID:       sessionUser.UserID,
 			Name:         req.Name,
@@ -538,18 +562,14 @@ func enrollHome(c *gin.Context) {
 				log.Printf("Failed to clean up mqtt access for home %d: %v", home.ID, cleanupErr)
 			}
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Printf("Failed to create home: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create home"})
 		return
 	}
 
-	mqttHost, mqttPort := cfg.MQTTHostAndPort()
 	c.JSON(http.StatusCreated, gin.H{
-		"home_id":       home.ID,
-		"name":          home.Name,
-		"mqtt_host":     mqttHost,
-		"mqtt_port":     mqttPort,
-		"mqtt_username": home.MQTTUsername,
-		"mqtt_password": home.MQTTPassword,
+		"home_id": home.ID,
+		"name":    home.Name,
 	})
 }
 
@@ -561,13 +581,37 @@ func enrollDevice(c *gin.Context) {
 	}
 
 	var req struct {
-		HomeID      uint   `json:"home_id" binding:"required"`
-		Name        string `json:"name" binding:"required"`
-		ProductID   uint   `json:"product_id" binding:"required"`
-		ProductName string `json:"product_name" binding:"required"`
+		HomeID          uint   `json:"home_id" binding:"required"`
+		Name            string `json:"name" binding:"required"`
+		ProductID       uint   `json:"product_id" binding:"required"`
+		ProductName     string `json:"product_name" binding:"required"`
+		DevicePublicKey string `json:"device_public_key" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
+		return
+	}
+
+	var err error
+	req.Name, err = validation.ValidateRequiredTrimmed("name", req.Name, 255)
+	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	req.ProductName, err = validation.ValidateRequiredTrimmed("product_name", req.ProductName, 255)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	req.DevicePublicKey, err = validation.ValidateRequiredTrimmed("device_public_key", req.DevicePublicKey, 4096)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	devicePubKey, err := devcrypto.ParseDevicePublicKey(req.DevicePublicKey)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid device public key"})
 		return
 	}
 
@@ -592,10 +636,11 @@ func enrollDevice(c *gin.Context) {
 	}
 
 	device := models.Device{
-		UserID:    sessionUser.UserID,
-		HomeID:    req.HomeID,
-		ProductID: product.ID,
-		Name:      req.Name,
+		UserID:          sessionUser.UserID,
+		HomeID:          req.HomeID,
+		ProductID:       product.ID,
+		Name:            req.Name,
+		DevicePublicKey: req.DevicePublicKey,
 	}
 	if err := db.DB.Create(&device).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create device"})
@@ -610,15 +655,25 @@ func enrollDevice(c *gin.Context) {
 	mqtt.SubscribeDevice(device)
 
 	mqttHost, mqttPort := cfg.MQTTHostAndPort()
+	bundle, err := devcrypto.EncryptProvisioningBundle(devicePubKey, devcrypto.ProvisioningPayload{
+		DeviceID:     fmt.Sprintf("%d", device.ID),
+		UserID:       fmt.Sprintf("%d", sessionUser.UserID),
+		HomeID:       fmt.Sprintf("%d", req.HomeID),
+		MQTTHost:     mqttHost,
+		MQTTPort:     mqttPort,
+		MQTTUsername: home.MQTTUsername,
+		MQTTPassword: home.MQTTPassword,
+		WiFiSSID:     home.WiFiSSID,
+		WiFiPassword: home.WiFiPassword,
+	})
+	if err != nil {
+		log.Printf("Failed to encrypt provisioning bundle for device %d: %v", device.ID, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to encrypt provisioning data"})
+		return
+	}
+
 	c.JSON(http.StatusCreated, gin.H{
-		"device_id":     fmt.Sprintf("%d", device.ID),
-		"user_id":       fmt.Sprintf("%d", sessionUser.UserID),
-		"home_id":       fmt.Sprintf("%d", req.HomeID),
-		"mqtt_host":     mqttHost,
-		"mqtt_port":     mqttPort,
-		"mqtt_username": home.MQTTUsername,
-		"mqtt_password": home.MQTTPassword,
-		"wifi_ssid":     home.WiFiSSID,
-		"wifi_password": home.WiFiPassword,
+		"device_id":           fmt.Sprintf("%d", device.ID),
+		"provisioning_bundle": bundle,
 	})
 }

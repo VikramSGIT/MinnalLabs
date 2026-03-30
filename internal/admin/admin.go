@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -53,8 +54,8 @@ func listProducts(c *gin.Context) {
 			"firmware_version":         product.FirmwareVersion,
 			"firmware_url":             effectiveFirmwareURL(product),
 			"firmware_md5_url":         effectiveFirmwareMD5URL(product),
-			"rollout_percentage":       effectiveRolloutPercentage(product),
-			"rollout_interval_minutes": effectiveRolloutIntervalMinutes(product),
+			"rollout_percentage":       product.EffectiveRolloutPercentage(),
+			"rollout_interval_minutes": product.EffectiveRolloutIntervalMinutes(),
 		}
 		if product.FirmwareUploadedAt != nil {
 			item["firmware_uploaded_at"] = product.FirmwareUploadedAt
@@ -76,20 +77,6 @@ func parseProductID(c *gin.Context) (uint, bool) {
 
 func sanitizeVersion(version string) string {
 	return versionSanitizer.ReplaceAllString(strings.TrimSpace(version), "_")
-}
-
-func effectiveRolloutPercentage(product models.Product) int {
-	if product.RolloutPercentage >= 1 && product.RolloutPercentage <= 100 {
-		return product.RolloutPercentage
-	}
-	return 20
-}
-
-func effectiveRolloutIntervalMinutes(product models.Product) int {
-	if product.RolloutIntervalMinutes > 0 {
-		return product.RolloutIntervalMinutes
-	}
-	return 60
 }
 
 func effectiveFirmwareURL(product models.Product) string {
@@ -287,7 +274,8 @@ func rolloutFirmware(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Printf("Failed to create rollout for product %d: %v", productID, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create rollout"})
 		return
 	}
 

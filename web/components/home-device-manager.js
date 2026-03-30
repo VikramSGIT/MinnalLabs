@@ -1,29 +1,9 @@
 import { ApiError, postJSON, requestJSON } from "../lib/api.js";
+import { escapeHtml } from "../lib/html.js";
+import { formatTimestamp } from "../lib/format.js";
 import "./device-enrollment.js";
 
 const DEVICE_POLL_INTERVAL_MS = 5000;
-
-function escapeHtml(value) {
-  return String(value)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
-}
-
-function formatTimestamp(value) {
-  if (!value) {
-    return "Not seen yet";
-  }
-
-  const timestamp = new Date(value);
-  if (Number.isNaN(timestamp.getTime())) {
-    return "Not seen yet";
-  }
-
-  return timestamp.toLocaleString();
-}
 
 function statusLabel(device) {
   if (device.mqtt_connected) {

@@ -1,9 +1,11 @@
 substitutions:
-  firmware_version: v0.0.0_1
+  firmware_version: v0.0.7
 
 esphome:
   name: ml-smart-sensor-v1
   friendly_name: presence sensor
+  includes:
+    - secure_ble_provisioning.h
   on_boot:
     priority: 200
     then:
@@ -12,6 +14,15 @@ esphome:
           id(char_product_type).set_value(std::vector<uint8_t>(product_name.begin(), product_name.end()));
           std::string product_id = "1";
           id(char_product_id).set_value(std::vector<uint8_t>(product_id.begin(), product_id.end()));
+          std::string key_error;
+          if (!secure_ble::ensure_key_material(id(g_device_private_key_b64), id(g_device_public_key_b64), key_error)) {
+            ESP_LOGE("secure_ble", "Failed to initialize device key material: %s", key_error.c_str());
+          }
+      - if:
+          condition:
+            lambda: 'return !id(g_device_public_key_b64).empty();'
+          then:
+            - script.execute: prime_public_key_chunk
       - if:
           condition:
             lambda: 'return id(g_wifi_ssid).length() > 0;'
@@ -145,6 +156,16 @@ globals:
     restore_value: yes
     max_restore_data_length: 64
     initial_value: '""'
+  - id: g_device_private_key_b64
+    type: std::string
+    restore_value: yes
+    max_restore_data_length: 64
+    initial_value: '""'
+  - id: g_device_public_key_b64
+    type: std::string
+    restore_value: yes
+    max_restore_data_length: 64
+    initial_value: '""'
 
 mqtt:
   id: my_mqtt
@@ -226,6 +247,11 @@ esp32_ble_server:
     - logger.log: "Dashboard connected!"
     - script.stop: blink_enrollment_led
     - switch.turn_on: user_led
+    - if:
+        condition:
+          lambda: 'return !id(g_device_public_key_b64).empty();'
+        then:
+          - script.execute: prime_public_key_chunk
   on_disconnect:
     - switch.turn_off: user_led
     - if:
@@ -245,101 +271,55 @@ esp32_ble_server:
           id: char_product_id
           read: true
 
-        - uuid: "12345678-1234-1234-1234-000000000002"
-          write: true
-          on_write:
-            - logger.log:
-                format: "BLE WRITE g_user_id: [%s]"
-                args: ['std::string(x.begin(), x.end()).c_str()']
-            - globals.set:
-                id: g_user_id
-                value: !lambda 'return std::string(x.begin(), x.end());'
+        - uuid: "12345678-1234-1234-1234-00000000000D"
+          id: char_device_public_key
+          read: true
 
-        - uuid: "12345678-1234-1234-1234-000000000003"
+        - uuid: "12345678-1234-1234-1234-00000000000F"
           write: true
           on_write:
-            - logger.log:
-                format: "BLE WRITE g_device_id: [%s]"
-                args: ['std::string(x.begin(), x.end()).c_str()']
-            - globals.set:
-                id: g_device_id
-                value: !lambda 'return std::string(x.begin(), x.end());'
+            - lambda: |-
+                std::vector<uint8_t> key_chunk;
+                std::string error;
+                if (secure_ble::handle_public_key_chunk_request(x, key_chunk, error)) {
+                  if (secure_ble::set_characteristic_packet(id(char_device_public_key), std::move(key_chunk), error)) {
+                    ESP_LOGI("secure_ble", "Prepared public key chunk response.");
+                  } else {
+                    ESP_LOGW("secure_ble", "Failed to publish public key chunk response: %s", error.c_str());
+                  }
+                } else {
+                  ESP_LOGW("secure_ble", "Rejected public key chunk request: %s", error.c_str());
+                }
 
-        - uuid: "12345678-1234-1234-1234-000000000004"
+        - uuid: "12345678-1234-1234-1234-00000000000E"
           write: true
           on_write:
-            - logger.log:
-                format: "BLE WRITE g_mqtt_url: [%s]"
-                args: ['std::string(x.begin(), x.end()).c_str()']
-            - globals.set:
-                id: g_mqtt_url
-                value: !lambda 'return std::string(x.begin(), x.end());'
-
-        - uuid: "12345678-1234-1234-1234-000000000005"
-          write: true
-          on_write:
-            - logger.log:
-                format: "BLE WRITE g_wifi_ssid: [%s]"
-                args: ['std::string(x.begin(), x.end()).c_str()']
-            - globals.set:
-                id: g_wifi_ssid
-                value: !lambda 'return std::string(x.begin(), x.end());'
-
-        - uuid: "12345678-1234-1234-1234-000000000006"
-          write: true
-          on_write:
-            - logger.log:
-                format: "BLE WRITE g_wifi_password: [%s]"
-                args: ['std::string(x.begin(), x.end()).c_str()']
-            - globals.set:
-                id: g_wifi_password
-                value: !lambda 'return std::string(x.begin(), x.end());'
-
-        - uuid: "12345678-1234-1234-1234-000000000007"
-          write: true
-          on_write:
-            - logger.log:
-                format: "BLE WRITE g_mqtt_username: [%s]"
-                args: ['std::string(x.begin(), x.end()).c_str()']
-            - globals.set:
-                id: g_mqtt_username
-                value: !lambda 'return std::string(x.begin(), x.end());'
-
-        - uuid: "12345678-1234-1234-1234-000000000008"
-          write: true
-          on_write:
-            - logger.log:
-                format: "BLE WRITE g_mqtt_password: [%s]"
-                args: ['std::string(x.begin(), x.end()).c_str()']
-            - globals.set:
-                id: g_mqtt_password
-                value: !lambda 'return std::string(x.begin(), x.end());'
-
-        - uuid: "12345678-1234-1234-1234-000000000009"
-          write: true
-          on_write:
-            - logger.log:
-                format: "BLE WRITE g_mqtt_port: [%s]"
-                args: ['std::string(x.begin(), x.end()).c_str()']
-            - globals.set:
-                id: g_mqtt_port
-                value: !lambda 'return std::string(x.begin(), x.end());'
-
-        - uuid: "12345678-1234-1234-1234-00000000000A"
-          write: true
-          on_write:
-            - logger.log:
-                format: "BLE WRITE g_home_id: [%s]"
-                args: ['std::string(x.begin(), x.end()).c_str()']
-            - globals.set:
-                id: g_home_id
-                value: !lambda 'return std::string(x.begin(), x.end());'
+            - lambda: |-
+                std::string error;
+                auto status = secure_ble::ingest_chunk(x, error);
+                if (status == secure_ble::ChunkStatus::kComplete) {
+                  ESP_LOGI("secure_ble", "Encrypted provisioning bundle received and validated.");
+                } else if (status == secure_ble::ChunkStatus::kAccepted) {
+                  ESP_LOGI("secure_ble", "Accepted provisioning chunk of %u bytes.", static_cast<unsigned>(x.size()));
+                } else {
+                  ESP_LOGW("secure_ble", "Rejected provisioning chunk: %s", error.c_str());
+                }
 
         - uuid: "12345678-1234-1234-1234-00000000000B"
           write: true
           on_write:
-            - logger.log: "Forcing NVS sync and Rebooting..."
-            - lambda: 'global_preferences->sync();'
+            - lambda: |-
+                std::string apply_error;
+                if (!secure_ble::apply_pending_provisioning(
+                      id(g_user_id), id(g_home_id), id(g_device_id),
+                      id(g_mqtt_url), id(g_mqtt_port), id(g_mqtt_username),
+                      id(g_mqtt_password), id(g_wifi_ssid), id(g_wifi_password),
+                      apply_error)) {
+                  ESP_LOGW("secure_ble", "Restart ignored because provisioning is not ready: %s", apply_error.c_str());
+                  return;
+                }
+                ESP_LOGI("secure_ble", "Secure provisioning applied. Syncing preferences and rebooting.");
+                global_preferences->sync();
             - delay: 2s
             - button.press: restart_device
 
@@ -374,6 +354,16 @@ switch:
     restore_mode: RESTORE_DEFAULT_OFF
 
 script:
+  - id: prime_public_key_chunk
+    mode: restart
+    then:
+      - lambda: |-
+          std::string key_error;
+          if (secure_ble::prime_public_key_characteristic(id(char_device_public_key), key_error)) {
+            ESP_LOGI("secure_ble", "Secure BLE public key chunk primed.");
+          } else {
+            ESP_LOGW("secure_ble", "Failed to prime public key chunk: %s", key_error.c_str());
+          }
   - id: run_pending_ota
     mode: single
     then:
@@ -423,8 +413,13 @@ script:
       - globals.set: { id: g_mqtt_port, value: '"1883"' }
       - globals.set: { id: g_wifi_ssid, value: '""' }
       - globals.set: { id: g_wifi_password, value: '""' }
+      - globals.set: { id: g_device_private_key_b64, value: '""' }
+      - globals.set: { id: g_device_public_key_b64, value: '""' }
       - script.execute: clear_pending_ota
-      - lambda: 'global_preferences->sync();'
+      - lambda: |-
+          secure_ble::clear_runtime_state();
+          secure_ble::clear_key_cache();
+          global_preferences->sync();
       - delay: 1s
       - button.press: restart_device
   - id: blink_enrollment_led

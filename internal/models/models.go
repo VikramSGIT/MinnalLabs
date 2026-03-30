@@ -51,6 +51,25 @@ type Product struct {
 	ProductCapabilities    []ProductCapability `json:"product_capabilities,omitempty"`
 }
 
+const (
+	DefaultRolloutPercentage      = 20
+	DefaultRolloutIntervalMinutes = 60
+)
+
+func (p Product) EffectiveRolloutPercentage() int {
+	if p.RolloutPercentage >= 1 && p.RolloutPercentage <= 100 {
+		return p.RolloutPercentage
+	}
+	return DefaultRolloutPercentage
+}
+
+func (p Product) EffectiveRolloutIntervalMinutes() int {
+	if p.RolloutIntervalMinutes > 0 {
+		return p.RolloutIntervalMinutes
+	}
+	return DefaultRolloutIntervalMinutes
+}
+
 type Capability struct {
 	ID               uint   `gorm:"primarykey" json:"id"`
 	Component        string `json:"component"`
@@ -76,6 +95,7 @@ type Device struct {
 	ProductID       uint           `json:"product_id"`
 	Name            string         `json:"name"`
 	FirmwareVersion string         `gorm:"column:firmware_version" json:"firmware_version"`
+	DevicePublicKey string         `gorm:"column:device_public_key" json:"-"`
 	Product         Product        `gorm:"foreignKey:ProductID" json:"product,omitempty"`
 	Home            Home           `gorm:"foreignKey:HomeID" json:"home,omitempty"`
 }
@@ -120,13 +140,17 @@ type OAuthClient struct {
 func (OAuthClient) TableName() string { return "oauth_clients" }
 
 type OAuthToken struct {
-	ID        uint `gorm:"primaryKey"`
-	ClientID  string
-	UserID    string
-	Access    string
-	Refresh   string
-	ExpiresIn time.Duration
-	CreatedAt time.Time
+	ID        uint       `gorm:"primaryKey"`
+	ClientID  string     `gorm:"column:client_id"`
+	UserID    string     `gorm:"column:user_id"`
+	Code      string     `gorm:"column:code"`
+	Access    string     `gorm:"column:access"`
+	Refresh   string     `gorm:"column:refresh"`
+	Data      string     `gorm:"column:data"`
+	ExpiresIn int64      `gorm:"column:expires_in"`
+	ExpiresAt *time.Time `gorm:"column:expires_at"`
+	CreatedAt time.Time  `gorm:"column:created_at"`
+	UpdatedAt time.Time  `gorm:"column:updated_at"`
 }
 
 func (OAuthToken) TableName() string { return "oauth_tokens" }

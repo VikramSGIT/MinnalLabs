@@ -9,8 +9,6 @@ import (
 	"time"
 )
 
-const sessionTTL = 7 * 24 * time.Hour
-
 type SessionInfo struct {
 	UserID     uint      `json:"user_id"`
 	Username   string    `json:"username"`

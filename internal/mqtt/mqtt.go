@@ -4,6 +4,7 @@ import (
 	"log"
 	"strconv"
 	"strings"
+	"sync/atomic"
 
 	pahomqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/iot-backend/internal/config"
@@ -12,10 +13,18 @@ import (
 )
 
 var Client pahomqtt.Client
-var statusUpdateHook func(deviceID uint, status string)
+var statusUpdateHookVal atomic.Value
 
 func RegisterStatusUpdateHook(hook func(deviceID uint, status string)) {
-	statusUpdateHook = hook
+	statusUpdateHookVal.Store(hook)
+}
+
+func loadStatusUpdateHook() func(deviceID uint, status string) {
+	v := statusUpdateHookVal.Load()
+	if v == nil {
+		return nil
+	}
+	return v.(func(deviceID uint, status string))
 }
 
 func InitMQTT(cfg *config.Config) {
@@ -50,8 +59,8 @@ var messagePubHandler pahomqtt.MessageHandler = func(client pahomqtt.Client, msg
 
 		payload := string(msg.Payload())
 		state.SetDevicePresence(uint(deviceID), payload)
-		if statusUpdateHook != nil {
-			statusUpdateHook(uint(deviceID), payload)
+		if hook := loadStatusUpdateHook(); hook != nil {
+			hook(uint(deviceID), payload)
 		}
 		log.Printf("MQTT: device %d status = %s", deviceID, payload)
 		return

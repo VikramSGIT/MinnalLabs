@@ -168,7 +168,7 @@ docker-compose up -d
 2. Create a new Smart Home project.
 3. Set the **Fulfillment URL** to `https://iot.yourdomain.com/api/google/fulfillment`.
 4. Set up **Account Linking**:
-   * Client ID: `google-alexa-client`
-   * Client Secret: `my-secret-key` (from `oauth.go` defaults)
+   * Client ID: `google-client` (or the value of `OAUTH_CLIENT_ID` if overridden)
+   * Client Secret: use the value configured in `OAUTH_CLIENT_SECRET`
    * Authorization URL: `https://iot.yourdomain.com/oauth/authorize`
    * Token URL: `https://iot.yourdomain.com/oauth/token`

@@ -1,24 +1,6 @@
 import { ApiError, postFormData, postJSON, requestJSON } from "../lib/api.js";
-
-function escapeHtml(value) {
-  return String(value)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
-}
-
-function formatTimestamp(value) {
-  if (!value) {
-    return "Not uploaded";
-  }
-  const timestamp = new Date(value);
-  if (Number.isNaN(timestamp.getTime())) {
-    return "Not uploaded";
-  }
-  return timestamp.toLocaleString();
-}
+import { escapeHtml } from "../lib/html.js";
+import { formatTimestamp } from "../lib/format.js";
 
 function rolloutFormDefaults(product) {
   const percentageValue = Number.parseInt(product?.rollout_percentage ?? "0", 10);
@@ -77,7 +59,7 @@ class AdminFirmwareManager extends HTMLElement {
                   <div>Target: ${escapeHtml(rollout.target_version)}</div>
                   <div>Batch Size: ${escapeHtml(`${rollout.batch_percentage}%`)}</div>
                   <div>Interval: ${escapeHtml(`${rollout.batch_interval_minutes} min`)}</div>
-                  <div>Next Batch: ${escapeHtml(formatTimestamp(rollout.next_batch_at))}</div>
+                  <div>Next Batch: ${escapeHtml(formatTimestamp(rollout.next_batch_at, "Not uploaded"))}</div>
                   <div>Pending: ${escapeHtml(rollout.pending_count)}</div>
                   <div>Sent: ${escapeHtml(rollout.sent_count)}</div>
                   <div>Updated: ${escapeHtml(rollout.updated_count)}</div>
@@ -189,7 +171,7 @@ class AdminFirmwareManager extends HTMLElement {
           </div>
           <div class="meta">
             <strong>Uploaded At</strong>
-            <div>${escapeHtml(formatTimestamp(currentProduct?.firmware_uploaded_at))}</div>
+            <div>${escapeHtml(formatTimestamp(currentProduct?.firmware_uploaded_at, "Not uploaded"))}</div>
           </div>
         </div>
         <form id="firmwareForm">
@@ -218,7 +200,7 @@ class AdminFirmwareManager extends HTMLElement {
               <input id="firmwareFile" type="file" accept=".bin" required>
             </label>
           </div>
-          <p class="hint">Upload the ESPHome OTA binary (`*.ota.bin`). Factory binaries (`*.factory.bin`) are rejected because HTTP OTA cannot install them.</p>
+          <p class="hint">Upload the ESPHome OTA binary (<code>*.ota.bin</code>). Factory binaries (<code>*.factory.bin</code>) are rejected because HTTP OTA cannot install them.</p>
           <div class="button-row">
             <button id="uploadBtn" type="submit" ${this.isLoading ? "disabled" : ""}>${this.isUploading ? "Uploading..." : "Upload Firmware"}</button>
           </div>

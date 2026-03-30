@@ -12,6 +12,7 @@ import (
 	"github.com/iot-backend/internal/db"
 	"github.com/iot-backend/internal/models"
 	"github.com/iot-backend/internal/mqtt"
+	"github.com/iot-backend/internal/oauth"
 	"github.com/iot-backend/internal/state"
 )
 
@@ -29,9 +30,17 @@ type GoogleResponse struct {
 }
 
 func SetupGoogleRoutes(r *gin.Engine) {
-	r.POST("/api/google/fulfillment", func(c *gin.Context) {
+	api := r.Group("/api/google")
+	api.Use(oauth.RequireOAuthToken())
+	api.POST("/fulfillment", func(c *gin.Context) {
+		principal, ok := oauth.CurrentOAuthPrincipal(c)
+		if !ok {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+			return
+		}
+
 		var req GoogleRequest
-		if err := c.BindJSON(&req); err != nil {
+		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
 			return
 		}
@@ -47,13 +56,24 @@ func SetupGoogleRoutes(r *gin.Engine) {
 		var res GoogleResponse
 		res.RequestId = req.RequestId
 
+		var payload interface{}
 		switch intent {
 		case "action.devices.SYNC":
-			res.Payload = handleSync()
+			payload = handleSync(principal.RawUserID, principal.UserID)
 		case "action.devices.QUERY":
-			res.Payload = handleQuery(req.Inputs[0].Payload)
+			queryPayload, err := handleQuery(req.Inputs[0].Payload, principal.UserID)
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid query payload"})
+				return
+			}
+			payload = queryPayload
 		case "action.devices.EXECUTE":
-			res.Payload = handleExecute(req.Inputs[0].Payload)
+			execPayload, err := handleExecute(req.Inputs[0].Payload, principal.UserID)
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid execute payload"})
+				return
+			}
+			payload = execPayload
 		case "action.devices.DISCONNECT":
 			c.JSON(http.StatusOK, gin.H{})
 			return
@@ -62,6 +82,7 @@ func SetupGoogleRoutes(r *gin.Engine) {
 			return
 		}
 
+		res.Payload = payload
 		c.JSON(http.StatusOK, res)
 	})
 }
@@ -79,21 +100,31 @@ func parseCompoundID(compoundID string) (uint, string, error) {
 }
 
 // handleSync reads device IDs and product info from Valkey, names from DB (SYNC is infrequent).
-func handleSync() interface{} {
+func handleSync(agentUserID string, userID uint) interface{} {
 	devices := state.GetAllDevices()
-
-	nameMap := make(map[uint]string)
+	filteredDevices := make([]state.DeviceInfo, 0, len(devices))
 	for _, d := range devices {
-		if _, exists := nameMap[d.ID]; !exists {
-			var dev models.Device
-			if err := db.DB.Select("name").First(&dev, d.ID).Error; err == nil {
-				nameMap[d.ID] = dev.Name
-			}
+		if d.UserID == userID {
+			filteredDevices = append(filteredDevices, d)
+		}
+	}
+
+	deviceIDs := make([]uint, 0, len(filteredDevices))
+	for _, d := range filteredDevices {
+		deviceIDs = append(deviceIDs, d.ID)
+	}
+
+	nameMap := make(map[uint]string, len(deviceIDs))
+	if len(deviceIDs) > 0 {
+		var dbDevices []models.Device
+		db.DB.Select("id, name").Where("id IN ?", deviceIDs).Find(&dbDevices)
+		for _, dev := range dbDevices {
+			nameMap[dev.ID] = dev.Name
 		}
 	}
 
 	var googleDevices []map[string]interface{}
-	for _, d := range devices {
+	for _, d := range filteredDevices {
 		caps, err := state.GetProductCaps(d.ProductID)
 		if err != nil {
 			continue
@@ -104,8 +135,8 @@ func handleSync() interface{} {
 			traitName := "action.devices.traits." + cap.TraitType
 
 			dev := map[string]interface{}{
-				"id":   compoundID,
-				"type": cap.GoogleDeviceType,
+				"id":     compoundID,
+				"type":   cap.GoogleDeviceType,
 				"traits": []string{traitName},
 				"name": map[string]interface{}{
 					"name": fmt.Sprintf("%s %s", deviceName, cap.EsphomeKey),
@@ -117,44 +148,46 @@ func handleSync() interface{} {
 	}
 
 	return map[string]interface{}{
-		"agentUserId": "user123",
+		"agentUserId": agentUserID,
 		"devices":     googleDevices,
 	}
 }
 
 // handleQuery reads device metadata and state entirely from Valkey.
-func handleQuery(payload json.RawMessage) interface{} {
+func handleQuery(payload json.RawMessage, userID uint) (interface{}, error) {
 	var queryPayload struct {
 		Devices []struct {
 			ID string `json:"id"`
 		} `json:"devices"`
 	}
-	json.Unmarshal(payload, &queryPayload)
+	if err := json.Unmarshal(payload, &queryPayload); err != nil {
+		return nil, err
+	}
 
 	devicesMap := make(map[string]interface{})
 
 	for _, d := range queryPayload.Devices {
 		deviceID, capKey, err := parseCompoundID(d.ID)
 		if err != nil {
-			devicesMap[d.ID] = map[string]interface{}{"status": "ERROR"}
+			devicesMap[d.ID] = map[string]interface{}{"status": "ERROR", "errorCode": "deviceNotFound"}
 			continue
 		}
 
 		device, ok := state.GetDevice(deviceID)
-		if !ok {
-			devicesMap[d.ID] = map[string]interface{}{"status": "ERROR"}
+		if !ok || device.UserID != userID {
+			devicesMap[d.ID] = map[string]interface{}{"status": "ERROR", "errorCode": "deviceNotFound"}
 			continue
 		}
 
 		capInfo, ok := state.GetProductCapByKey(device.ProductID, capKey)
 		if !ok {
-			devicesMap[d.ID] = map[string]interface{}{"status": "ERROR"}
+			devicesMap[d.ID] = map[string]interface{}{"status": "ERROR", "errorCode": "deviceNotFound"}
 			continue
 		}
 
 		val, err := state.GetCapState(deviceID, capKey)
 		if err != nil {
-			devicesMap[d.ID] = map[string]interface{}{"status": "ERROR"}
+			devicesMap[d.ID] = map[string]interface{}{"status": "ERROR", "errorCode": "deviceOffline"}
 			continue
 		}
 
@@ -166,11 +199,11 @@ func handleQuery(payload json.RawMessage) interface{} {
 
 	return map[string]interface{}{
 		"devices": devicesMap,
-	}
+	}, nil
 }
 
 // handleExecute reads device metadata from Valkey, publishes to MQTT, updates state in Valkey.
-func handleExecute(payload json.RawMessage) interface{} {
+func handleExecute(payload json.RawMessage, userID uint) (interface{}, error) {
 	var execPayload struct {
 		Commands []struct {
 			Devices []struct {
@@ -182,52 +215,73 @@ func handleExecute(payload json.RawMessage) interface{} {
 			} `json:"execution"`
 		} `json:"commands"`
 	}
-	json.Unmarshal(payload, &execPayload)
+	if err := json.Unmarshal(payload, &execPayload); err != nil {
+		return nil, err
+	}
 
 	var commandsResult []map[string]interface{}
 
 	for _, cmd := range execPayload.Commands {
-		var ids []string
 		for _, d := range cmd.Devices {
-			ids = append(ids, d.ID)
-		}
-
-		for _, execution := range cmd.Execution {
-			for _, compoundID := range ids {
+			compoundID := d.ID
+			for _, execution := range cmd.Execution {
 				deviceID, capKey, err := parseCompoundID(compoundID)
 				if err != nil {
+					commandsResult = append(commandsResult, map[string]interface{}{
+						"ids":       []string{compoundID},
+						"status":    "ERROR",
+						"errorCode": "deviceNotFound",
+					})
 					continue
 				}
 
 				device, ok := state.GetDevice(deviceID)
-				if !ok {
+				if !ok || device.UserID != userID {
+					commandsResult = append(commandsResult, map[string]interface{}{
+						"ids":       []string{compoundID},
+						"status":    "ERROR",
+						"errorCode": "deviceNotFound",
+					})
 					continue
 				}
 
 				capInfo, ok := state.GetProductCapByKey(device.ProductID, capKey)
 				if !ok || !capInfo.Writable {
+					commandsResult = append(commandsResult, map[string]interface{}{
+						"ids":       []string{compoundID},
+						"status":    "ERROR",
+						"errorCode": "functionNotSupported",
+					})
 					continue
 				}
 
-				mqttPayload := extractMQTTPayload(execution.Command, execution.Params)
+				mqttPayload, supported := extractMQTTPayload(execution.Command, execution.Params)
+				if !supported {
+					commandsResult = append(commandsResult, map[string]interface{}{
+						"ids":       []string{compoundID},
+						"status":    "ERROR",
+						"errorCode": "functionNotSupported",
+					})
+					continue
+				}
 				state.SetCapState(deviceID, capKey, mqttPayload)
 
 				topic := models.BuildTopic(device.UserID, device.HomeID, deviceID, capInfo.Component, capKey, "command")
 				mqtt.Publish(topic, mqttPayload)
 				log.Printf("Google Execute: %s cap %s = %s", compoundID, capKey, mqttPayload)
+
+				commandsResult = append(commandsResult, map[string]interface{}{
+					"ids":    []string{compoundID},
+					"status": "SUCCESS",
+					"states": map[string]interface{}{"online": true},
+				})
 			}
 		}
-
-		commandsResult = append(commandsResult, map[string]interface{}{
-			"ids":    ids,
-			"status": "SUCCESS",
-			"states": map[string]interface{}{"online": true},
-		})
 	}
 
 	return map[string]interface{}{
 		"commands": commandsResult,
-	}
+	}, nil
 }
 
 func buildTraitState(traitType, value string) map[string]interface{} {
@@ -243,15 +297,15 @@ func buildTraitState(traitType, value string) map[string]interface{} {
 	return m
 }
 
-func extractMQTTPayload(command string, params map[string]interface{}) string {
+func extractMQTTPayload(command string, params map[string]interface{}) (string, bool) {
 	switch command {
 	case "action.devices.commands.OnOff":
 		on, _ := params["on"].(bool)
 		if on {
-			return "1"
+			return "1", true
 		}
-		return "0"
+		return "0", true
 	default:
-		return "0"
+		return "", false
 	}
 }

@@ -65,20 +65,6 @@ type deviceWithSort struct {
 	SortKey string
 }
 
-func effectiveRolloutPercentage(product models.Product) int {
-	if product.RolloutPercentage >= 1 && product.RolloutPercentage <= 100 {
-		return product.RolloutPercentage
-	}
-	return 20
-}
-
-func effectiveRolloutIntervalMinutes(product models.Product) int {
-	if product.RolloutIntervalMinutes > 0 {
-		return product.RolloutIntervalMinutes
-	}
-	return 60
-}
-
 func currentDeviceFirmwareVersion(device models.Device) string {
 	current := strings.TrimSpace(device.FirmwareVersion)
 	if presence, found := state.GetDevicePresence(device.ID); found && strings.TrimSpace(presence.FirmwareVersion) != "" {
@@ -191,8 +177,8 @@ func CreateRollout(product models.Product, createdBy uint) (*models.FirmwareRoll
 	if product.ID == 0 || product.FirmwareVersion == "" || currentProductFirmwareURL(product) == "" || currentProductMD5URL(product) == "" {
 		return nil, 0, 0, fmt.Errorf("product firmware is incomplete")
 	}
-	batchPercentage := effectiveRolloutPercentage(product)
-	batchIntervalMinutes := effectiveRolloutIntervalMinutes(product)
+	batchPercentage := product.EffectiveRolloutPercentage()
+	batchIntervalMinutes := product.EffectiveRolloutIntervalMinutes()
 	if batchPercentage < 1 || batchPercentage > 100 {
 		return nil, 0, 0, fmt.Errorf("batch_percentage must be between 1 and 100")
 	}
@@ -284,9 +270,38 @@ func ListRolloutsForProduct(productID uint, limit int) ([]RolloutSummary, error)
 		return nil, err
 	}
 
+	rolloutIDs := make([]uint, 0, len(rollouts))
+	for _, r := range rollouts {
+		rolloutIDs = append(rolloutIDs, r.ID)
+	}
+
+	type stateCount struct {
+		RolloutID uint   `gorm:"column:rollout_id"`
+		State     string `gorm:"column:state"`
+		Count     int64  `gorm:"column:cnt"`
+	}
+	var counts []stateCount
+	if len(rolloutIDs) > 0 {
+		db.DB.Raw(`
+			SELECT rollout_id, state, COUNT(*) AS cnt
+			FROM firmware_rollout_devices
+			WHERE rollout_id IN ?
+			GROUP BY rollout_id, state
+		`, rolloutIDs).Scan(&counts)
+	}
+
+	countMap := make(map[uint]map[string]int64, len(rolloutIDs))
+	for _, c := range counts {
+		if countMap[c.RolloutID] == nil {
+			countMap[c.RolloutID] = make(map[string]int64)
+		}
+		countMap[c.RolloutID][c.State] = c.Count
+	}
+
 	summaries := make([]RolloutSummary, 0, len(rollouts))
 	for _, rollout := range rollouts {
-		summary := RolloutSummary{
+		sc := countMap[rollout.ID]
+		summaries = append(summaries, RolloutSummary{
 			ID:                   rollout.ID,
 			TargetVersion:        rollout.TargetVersion,
 			BatchPercentage:      rollout.BatchPercentage,
@@ -295,14 +310,13 @@ func ListRolloutsForProduct(productID uint, limit int) ([]RolloutSummary, error)
 			NextBatchAt:          rollout.NextBatchAt,
 			CreatedAt:            rollout.CreatedAt,
 			UpdatedAt:            rollout.UpdatedAt,
-		}
-		db.DB.Model(&models.FirmwareRolloutDevice{}).Where("rollout_id = ? AND state = ?", rollout.ID, rolloutDevicePending).Count(&summary.PendingCount)
-		db.DB.Model(&models.FirmwareRolloutDevice{}).Where("rollout_id = ? AND state = ?", rollout.ID, rolloutDeviceSent).Count(&summary.SentCount)
-		db.DB.Model(&models.FirmwareRolloutDevice{}).Where("rollout_id = ? AND state = ?", rollout.ID, rolloutDeviceUpdated).Count(&summary.UpdatedCount)
-		db.DB.Model(&models.FirmwareRolloutDevice{}).Where("rollout_id = ? AND state = ?", rollout.ID, rolloutDeviceSkipped).Count(&summary.SkippedCount)
-		db.DB.Model(&models.FirmwareRolloutDevice{}).Where("rollout_id = ? AND state = ?", rollout.ID, rolloutDeviceCancelled).Count(&summary.CancelledCount)
-		db.DB.Model(&models.FirmwareRolloutDevice{}).Where("rollout_id = ? AND state = ?", rollout.ID, rolloutDeviceFailed).Count(&summary.FailedCount)
-		summaries = append(summaries, summary)
+			PendingCount:         sc[rolloutDevicePending],
+			SentCount:            sc[rolloutDeviceSent],
+			UpdatedCount:         sc[rolloutDeviceUpdated],
+			SkippedCount:         sc[rolloutDeviceSkipped],
+			CancelledCount:       sc[rolloutDeviceCancelled],
+			FailedCount:          sc[rolloutDeviceFailed],
+		})
 	}
 	return summaries, nil
 }
