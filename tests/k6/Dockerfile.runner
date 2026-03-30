@@ -1,0 +1,18 @@
+FROM grafana/k6:latest AS k6bin
+
+FROM golang:1.25-alpine
+
+WORKDIR /app
+
+RUN apk add --no-cache \
+        bash \
+        ca-certificates \
+        curl \
+        graphviz \
+        postgresql-client \
+        python3 \
+    && update-ca-certificates
+
+COPY --from=k6bin /usr/bin/k6 /usr/local/bin/k6
+
+ENTRYPOINT ["/app/tests/k6/run.sh"]

@@ -13,8 +13,9 @@ import (
 
 type Config struct {
 	Server struct {
-		Port string
-		Host string
+		Port    string
+		Host    string
+		Profile string
 	}
 	Database struct {
 		Host     string
@@ -51,6 +52,10 @@ type Config struct {
 	Firmware struct {
 		StorageDir string
 	}
+	Pprof struct {
+		Enabled bool
+		Addr    string
+	}
 }
 
 func LoadConfig() *Config {
@@ -68,6 +73,7 @@ func LoadConfig() *Config {
 	// Defaults — every key must be registered for AutomaticEnv + Unmarshal to work
 	viper.SetDefault("server.port", "8080")
 	viper.SetDefault("server.host", "0.0.0.0")
+	viper.SetDefault("server.profile", "default")
 	viper.SetDefault("database.host", "localhost")
 	viper.SetDefault("database.port", "5432")
 	viper.SetDefault("database.user", "")
@@ -89,6 +95,8 @@ func LoadConfig() *Config {
 	viper.SetDefault("oauth.client_id", "google-client")
 	viper.SetDefault("oauth.client_secret", "")
 	viper.SetDefault("firmware.storage_dir", "./firmware")
+	viper.SetDefault("pprof.enabled", false)
+	viper.SetDefault("pprof.addr", "127.0.0.1:6060")
 
 	if err := viper.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {

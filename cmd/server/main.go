@@ -4,8 +4,10 @@ import (
 	"context"
 	"log"
 	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -62,6 +64,25 @@ func main() {
 		Handler: r,
 	}
 
+	var pprofSrv *http.Server
+	if strings.EqualFold(strings.TrimSpace(cfg.Server.Profile), "stress") && cfg.Pprof.Enabled {
+		pprofAddr := strings.TrimSpace(cfg.Pprof.Addr)
+		if pprofAddr == "" {
+			pprofAddr = "127.0.0.1:6060"
+		}
+		pprofSrv = &http.Server{
+			Addr:    pprofAddr,
+			Handler: http.DefaultServeMux,
+		}
+
+		go func() {
+			log.Printf("Starting pprof server on %s", pprofSrv.Addr)
+			if err := pprofSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				log.Printf("pprof server error: %v", err)
+			}
+		}()
+	}
+
 	go func() {
 		log.Printf("Starting HTTP server on %s", serverAddr)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -79,6 +100,11 @@ func main() {
 
 	if err := srv.Shutdown(ctx); err != nil {
 		log.Printf("HTTP server forced to shutdown: %v", err)
+	}
+	if pprofSrv != nil {
+		if err := pprofSrv.Shutdown(ctx); err != nil {
+			log.Printf("pprof server forced to shutdown: %v", err)
+		}
 	}
 
 	mqtt.Client.Disconnect(250)

@@ -1,0 +1,146 @@
+name: iot_backend_stress
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: iotdb
+      POSTGRES_USER: iotuser
+      POSTGRES_PASSWORD: iotpassword
+    volumes:
+      - stress_postgresdata:/var/lib/postgresql/data
+      - ./docker/stress/postgres:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  valkey:
+    image: valkey/valkey:8-alpine
+    command: ["valkey-server", "--save", "", "--appendonly", "no"]
+    volumes:
+      - stress_valkeydata:/data
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  mosquitto-init:
+    image: eclipse-mosquitto:2
+    environment:
+      MQTT_ADMIN_USERNAME: admin
+      MQTT_ADMIN_PASSWORD: admin-password
+    volumes:
+      - stress_mosquitto_data:/mosquitto/data
+      - ./docker/stress/mosquitto/init.sh:/bootstrap/init.sh:ro
+    entrypoint: ["/bin/sh", "-c", "/bootstrap/init.sh && tail -f /dev/null"]
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /mosquitto/data/dynamic-security.json"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  mosquitto:
+    image: eclipse-mosquitto:2
+    depends_on:
+      mosquitto-init:
+        condition: service_healthy
+    volumes:
+      - stress_mosquitto_data:/mosquitto/data
+      - ./docker/stress/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mosquitto_sub -h localhost -p 1883 -u admin -P admin-password -t '$$SYS/broker/version' -C 1 -W 5 >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  caddy:
+    image: caddy:2-alpine
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - stress_firmwaredata:/srv/firmware:ro
+
+  backend:
+    build: .
+    environment:
+      SERVER_HOST: 0.0.0.0
+      SERVER_PORT: 8080
+      SERVER_PROFILE: stress
+      DATABASE_HOST: postgres
+      DATABASE_PORT: 5432
+      DATABASE_USER: iotuser
+      DATABASE_PASSWORD: iotpassword
+      DATABASE_NAME: iotdb
+      MQTT_BROKER: tcp://mosquitto:1883
+      MQTT_HOST: mosquitto
+      MQTT_PORT: 1883
+      MQTT_USERNAME: admin
+      MQTT_PASSWORD: admin-password
+      FRONTEND_ALLOWED_ORIGINS: http://localhost
+      SESSION_SECURE: "false"
+      OAUTH_CLIENT_ID: google-client
+      OAUTH_CLIENT_SECRET: stress-oauth-secret
+      VALKEY_ADDR: valkey:6379
+      FIRMWARE_STORAGE_DIR: /app/firmware
+      PPROF_ENABLED: "true"
+      PPROF_ADDR: 0.0.0.0:6060
+    volumes:
+      - stress_firmwaredata:/app/firmware
+    depends_on:
+      postgres:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+      mosquitto:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/login >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  k6:
+    build:
+      context: .
+      dockerfile: tests/k6/Dockerfile.runner
+    working_dir: /app/tests/k6
+    environment:
+      BASE_URL: http://backend:8080
+      PPROF_BASE_URL: http://backend:6060
+      CADDY_BASE_URL: http://caddy
+      OAUTH_CLIENT_ID: google-client
+      OAUTH_CLIENT_SECRET: stress-oauth-secret
+      OAUTH_REDIRECT_URI: https://oauth-redirect.googleusercontent.com/
+      SESSION_COOKIE_NAME: user_session
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: iotuser
+      DB_PASSWORD: iotpassword
+      DB_NAME: iotdb
+      DB_SSLMODE: disable
+      K6_PRODUCT_ID: 1
+      K6_PRODUCT_NAME: ml-smart-sensor-v1
+      K6_VUS: ${K6_VUS:-10}
+      K6_DURATION: ${K6_DURATION:-1m}
+      K6_RAMP_UP: ${K6_RAMP_UP:-15s}
+      K6_RAMP_DOWN: ${K6_RAMP_DOWN:-10s}
+      PPROF_CPU_SECONDS: ${PPROF_CPU_SECONDS:-30}
+    volumes:
+      - .:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mosquitto:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+      caddy:
+        condition: service_started
+
+volumes:
+  stress_postgresdata:
+  stress_valkeydata:
+  stress_mosquitto_data:
+  stress_firmwaredata:

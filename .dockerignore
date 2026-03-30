@@ -1,0 +1,6 @@
+.git
+firmware
+reports
+tests/k6/artifacts
+tests/k6/pprof
+tests/k6/report.html
