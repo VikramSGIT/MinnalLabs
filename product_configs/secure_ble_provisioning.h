@@ -56,6 +56,7 @@ struct ProvisioningValues {
   std::string mqtt_port;
   std::string mqtt_username;
   std::string mqtt_password;
+  int mqtt_connect_delay_seconds{15};
   std::string wifi_ssid;
   std::string wifi_password;
 
@@ -68,6 +69,7 @@ struct ProvisioningValues {
     mqtt_port.clear();
     mqtt_username.clear();
     mqtt_password.clear();
+    mqtt_connect_delay_seconds = 15;
     wifi_ssid.clear();
     wifi_password.clear();
   }
@@ -623,6 +625,24 @@ inline bool parse_plaintext_payload(const std::vector<uint8_t> &plaintext,
     *out = std::string(value.as<const char *>());
     return true;
   };
+  auto optional_int = [&](const char *key, int default_value, int *out) -> bool {
+    JsonVariantConst value = doc[key];
+    if (value.isNull()) {
+      *out = default_value;
+      return true;
+    }
+    if (!value.is<int>()) {
+      error = std::string("invalid provisioning field: ") + key;
+      return false;
+    }
+    int parsed_value = value.as<int>();
+    if (parsed_value < 0) {
+      error = std::string("invalid provisioning field: ") + key;
+      return false;
+    }
+    *out = parsed_value;
+    return true;
+  };
 
   ProvisioningValues parsed;
   if (!require_string("user_id", &parsed.user_id) ||
@@ -632,6 +652,7 @@ inline bool parse_plaintext_payload(const std::vector<uint8_t> &plaintext,
       !require_string("mqtt_port", &parsed.mqtt_port) ||
       !require_string("mqtt_username", &parsed.mqtt_username) ||
       !require_string("mqtt_password", &parsed.mqtt_password) ||
+      !optional_int("mqtt_connect_delay_seconds", 15, &parsed.mqtt_connect_delay_seconds) ||
       !require_string("wifi_ssid", &parsed.wifi_ssid) ||
       !require_string("wifi_password", &parsed.wifi_password)) {
     return false;
@@ -744,6 +765,7 @@ inline bool apply_pending_provisioning(std::string &user_id,
                                        std::string &mqtt_port,
                                        std::string &mqtt_username,
                                        std::string &mqtt_password,
+                                       int &mqtt_connect_delay_seconds,
                                        std::string &wifi_ssid,
                                        std::string &wifi_password,
                                        std::string &error) {
@@ -759,6 +781,7 @@ inline bool apply_pending_provisioning(std::string &user_id,
   mqtt_port = pending_values().mqtt_port;
   mqtt_username = pending_values().mqtt_username;
   mqtt_password = pending_values().mqtt_password;
+  mqtt_connect_delay_seconds = pending_values().mqtt_connect_delay_seconds;
   wifi_ssid = pending_values().wifi_ssid;
   wifi_password = pending_values().wifi_password;
 

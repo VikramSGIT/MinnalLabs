@@ -9,11 +9,13 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/iot-backend/internal/config"
 	devcrypto "github.com/iot-backend/internal/crypto"
 	"github.com/iot-backend/internal/db"
+	"github.com/iot-backend/internal/homejobs"
 	"github.com/iot-backend/internal/models"
 	"github.com/iot-backend/internal/mqtt"
 	"github.com/iot-backend/internal/oauth"
@@ -125,13 +127,25 @@ func listHomes(c *gin.Context) {
 
 	response := make([]gin.H, 0, len(homes))
 	for _, home := range homes {
-		response = append(response, gin.H{
-			"home_id": home.ID,
-			"name":    home.Name,
-		})
+		response = append(response, homeResponse(home))
 	}
 
 	c.JSON(http.StatusOK, response)
+}
+
+func homeResponse(home models.Home) gin.H {
+	response := gin.H{
+		"home_id":              home.ID,
+		"name":                 home.Name,
+		"mqtt_provision_state": home.MQTTState(),
+	}
+	if strings.TrimSpace(home.MQTTProvisionError) != "" {
+		response["mqtt_provision_error"] = home.MQTTProvisionError
+	}
+	if home.MQTTProvisionedAt != nil {
+		response["mqtt_provisioned_at"] = home.MQTTProvisionedAt
+	}
+	return response
 }
 
 func firmwareState(device models.Device, presence state.DevicePresence, presenceFound bool) (string, string, bool) {
@@ -390,20 +404,33 @@ func deleteHome(c *gin.Context) {
 		return
 	}
 
-	if err := db.DB.Transaction(func(tx *gorm.DB) error {
-		if len(devices) > 0 {
-			deviceIDs := make([]uint, 0, len(devices))
-			for _, device := range devices {
-				deviceIDs = append(deviceIDs, device.ID)
-			}
+	deviceIDs := make([]uint, 0, len(devices))
+	for _, device := range devices {
+		deviceIDs = append(deviceIDs, device.ID)
+	}
 
-			if err := tx.Unscoped().Where("id IN ?", deviceIDs).Delete(&models.Device{}).Error; err != nil {
-				return fmt.Errorf("delete home devices: %w", err)
+	if err := db.DB.Transaction(func(tx *gorm.DB) error {
+		now := time.Now().UTC()
+		if len(deviceIDs) > 0 {
+			if err := tx.Where("id IN ?", deviceIDs).Delete(&models.Device{}).Error; err != nil {
+				return fmt.Errorf("soft delete home devices: %w", err)
 			}
 		}
 
-		if err := tx.Unscoped().Delete(&home).Error; err != nil {
-			return fmt.Errorf("delete home: %w", err)
+		if err := tx.Model(&home).Updates(map[string]interface{}{
+			"mqtt_provision_state": models.HomeMQTTProvisionStateDeleting,
+			"mqtt_provision_error": "",
+			"updated_at":           now,
+		}).Error; err != nil {
+			return fmt.Errorf("mark home deleting: %w", err)
+		}
+
+		if err := tx.Delete(&home).Error; err != nil {
+			return fmt.Errorf("soft delete home: %w", err)
+		}
+
+		if err := homejobs.ReplaceWithCleanupJob(tx, home.ID); err != nil {
+			return fmt.Errorf("enqueue home cleanup: %w", err)
 		}
 
 		return nil
@@ -413,28 +440,11 @@ func deleteHome(c *gin.Context) {
 		return
 	}
 
-	if home.MQTTUsername != "" {
-		if err := mqtt.CleanupHomeAccess(home.UserID, home.ID, home.MQTTUsername); err != nil {
-			log.Printf("Failed to clean up MQTT access for home %d: %v", homeID, err)
-		}
-	}
-
-	for _, device := range devices {
-		mqtt.UnsubscribeDevice(device)
-		if err := mqtt.ClearRetainedDeviceFirmwareUpdate(device); err != nil {
-			log.Printf("Failed clearing retained ota for deleted device %d: %v", device.ID, err)
-		}
-	}
-	deviceIDs := make([]uint, 0, len(devices))
-	for _, device := range devices {
-		deviceIDs = append(deviceIDs, device.ID)
-	}
-	state.RemoveDevices(deviceIDs)
-
 	c.JSON(http.StatusOK, gin.H{
-		"deleted":    true,
-		"home_id":    home.ID,
-		"device_ids": deviceIDs,
+		"deleted":              true,
+		"home_id":              home.ID,
+		"device_ids":           deviceIDs,
+		"mqtt_provision_state": models.HomeMQTTProvisionStateDeleting,
 	})
 }
 
@@ -513,18 +523,19 @@ func enrollHome(c *gin.Context) {
 	}
 
 	var (
-		home        models.Home
-		mqttUser    string
-		mqttPass    string
-		provisioned bool
+		home     models.Home
+		mqttUser string
+		mqttPass string
 	)
 
 	err = db.DB.Transaction(func(tx *gorm.DB) error {
 		home = models.Home{
-			UserID:       sessionUser.UserID,
-			Name:         req.Name,
-			WiFiSSID:     req.WiFiSSID,
-			WiFiPassword: req.WiFiPassword,
+			UserID:             sessionUser.UserID,
+			Name:               req.Name,
+			WiFiSSID:           req.WiFiSSID,
+			WiFiPassword:       req.WiFiPassword,
+			MQTTProvisionState: models.HomeMQTTProvisionStatePending,
+			MQTTProvisionError: "",
 		}
 		if err := tx.Create(&home).Error; err != nil {
 			return fmt.Errorf("create home row: %w", err)
@@ -540,37 +551,33 @@ func enrollHome(c *gin.Context) {
 			return fmt.Errorf("generate mqtt password: %w", err)
 		}
 
-		if err := mqtt.ProvisionHomeAccess(sessionUser.UserID, home.ID, mqttUser, mqttPass); err != nil {
-			return fmt.Errorf("provision mqtt access: %w", err)
-		}
-		provisioned = true
-
 		if err := tx.Model(&home).Updates(map[string]interface{}{
-			"mqtt_username": mqttUser,
-			"mqtt_password": mqttPass,
+			"mqtt_username":        mqttUser,
+			"mqtt_password":        mqttPass,
+			"mqtt_provision_state": models.HomeMQTTProvisionStatePending,
+			"mqtt_provision_error": "",
+			"mqtt_provisioned_at":  nil,
 		}).Error; err != nil {
 			return fmt.Errorf("persist mqtt credentials: %w", err)
 		}
 
 		home.MQTTUsername = mqttUser
 		home.MQTTPassword = mqttPass
+		home.MQTTProvisionState = models.HomeMQTTProvisionStatePending
+		home.MQTTProvisionError = ""
+
+		if err := homejobs.EnqueueProvision(tx, home.ID); err != nil {
+			return fmt.Errorf("enqueue mqtt provisioning: %w", err)
+		}
 		return nil
 	})
 	if err != nil {
-		if provisioned {
-			if cleanupErr := mqtt.CleanupHomeAccess(sessionUser.UserID, home.ID, mqttUser); cleanupErr != nil {
-				log.Printf("Failed to clean up mqtt access for home %d: %v", home.ID, cleanupErr)
-			}
-		}
 		log.Printf("Failed to create home: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create home"})
 		return
 	}
 
-	c.JSON(http.StatusCreated, gin.H{
-		"home_id": home.ID,
-		"name":    home.Name,
-	})
+	c.JSON(http.StatusCreated, homeResponse(home))
 }
 
 func enrollDevice(c *gin.Context) {
@@ -624,6 +631,20 @@ func enrollDevice(c *gin.Context) {
 		c.JSON(http.StatusForbidden, gin.H{"error": "home does not belong to user"})
 		return
 	}
+	if !home.AllowsDeviceProvisioning() {
+		c.JSON(http.StatusConflict, gin.H{
+			"error":                fmt.Sprintf("home mqtt provisioning is %s", home.MQTTState()),
+			"mqtt_provision_state": home.MQTTState(),
+		})
+		return
+	}
+	if !home.HasMQTTCredentials() {
+		c.JSON(http.StatusConflict, gin.H{
+			"error":                "home mqtt credentials are not ready",
+			"mqtt_provision_state": home.MQTTState(),
+		})
+		return
+	}
 
 	var product models.Product
 	if err := db.DB.Where("id = ? AND name = ?", req.ProductID, req.ProductName).Take(&product).Error; err != nil {
@@ -656,15 +677,16 @@ func enrollDevice(c *gin.Context) {
 
 	mqttHost, mqttPort := cfg.MQTTHostAndPort()
 	bundle, err := devcrypto.EncryptProvisioningBundle(devicePubKey, devcrypto.ProvisioningPayload{
-		DeviceID:     fmt.Sprintf("%d", device.ID),
-		UserID:       fmt.Sprintf("%d", sessionUser.UserID),
-		HomeID:       fmt.Sprintf("%d", req.HomeID),
-		MQTTHost:     mqttHost,
-		MQTTPort:     mqttPort,
-		MQTTUsername: home.MQTTUsername,
-		MQTTPassword: home.MQTTPassword,
-		WiFiSSID:     home.WiFiSSID,
-		WiFiPassword: home.WiFiPassword,
+		DeviceID:                fmt.Sprintf("%d", device.ID),
+		UserID:                  fmt.Sprintf("%d", sessionUser.UserID),
+		HomeID:                  fmt.Sprintf("%d", req.HomeID),
+		MQTTHost:                mqttHost,
+		MQTTPort:                mqttPort,
+		MQTTUsername:            home.MQTTUsername,
+		MQTTPassword:            home.MQTTPassword,
+		MQTTConnectDelaySeconds: homejobs.DeviceMQTTConnectDelaySeconds,
+		WiFiSSID:                home.WiFiSSID,
+		WiFiPassword:            home.WiFiPassword,
 	})
 	if err != nil {
 		log.Printf("Failed to encrypt provisioning bundle for device %d: %v", device.ID, err)

@@ -1,6 +1,40 @@
 import { ApiError, postJSON, requestJSON } from "../lib/api.js";
 import { escapeHtml } from "../lib/html.js";
 
+function homeProvisionState(home) {
+  return String(home?.mqtt_provision_state || "ready").toLowerCase();
+}
+
+function homeProvisionLabel(home) {
+  switch (homeProvisionState(home)) {
+    case "pending":
+      return "MQTT provisioning pending";
+    case "failed":
+      return "MQTT provisioning failed";
+    case "deleting":
+      return "Deleting";
+    default:
+      return "MQTT ready";
+  }
+}
+
+function homeProvisionClass(home) {
+  switch (homeProvisionState(home)) {
+    case "pending":
+      return "state-pending";
+    case "failed":
+      return "state-failed";
+    case "deleting":
+      return "state-deleting";
+    default:
+      return "state-ready";
+  }
+}
+
+function canSelectHome(home) {
+  return homeProvisionState(home) !== "failed" && homeProvisionState(home) !== "deleting";
+}
+
 class HomeCreateForm extends HTMLElement {
   constructor() {
     super();
@@ -27,6 +61,7 @@ class HomeCreateForm extends HTMLElement {
 
   render() {
     const username = this.user ? this.user.username : "Unknown user";
+    const selectedHome = this.homes.find((home) => String(home.home_id) === String(this.selectedHomeId)) || null;
     const existingHomesMarkup = this.isLoadingHomes
       ? '<p class="hint">Loading previously created homes...</p>'
       : this.homes.length > 0
@@ -39,13 +74,27 @@ class HomeCreateForm extends HTMLElement {
                     .map(
                       (home) => `
                         <option value="${home.home_id}" ${String(home.home_id) === this.selectedHomeId ? "selected" : ""}>
-                          ${escapeHtml(home.name)} (ID ${home.home_id})
+                          ${escapeHtml(home.name)} (ID ${home.home_id}) - ${escapeHtml(homeProvisionLabel(home))}
                         </option>
                       `,
                     )
                     .join("")}
                 </select>
               </label>
+              ${
+                selectedHome
+                  ? `
+                    <p class="home-status ${homeProvisionClass(selectedHome)}">
+                      ${escapeHtml(homeProvisionLabel(selectedHome))}
+                      ${
+                        selectedHome.mqtt_provision_error
+                          ? `: ${escapeHtml(selectedHome.mqtt_provision_error)}`
+                          : ""
+                      }
+                    </p>
+                  `
+                  : ""
+              }
               <div class="actions">
                 <button id="selectBtn" type="submit" class="secondary">Use Selected Home</button>
                 <button id="deleteHomeBtn" type="button" class="danger" ${this.isDeletingHome ? "disabled" : ""}>
@@ -206,6 +255,30 @@ class HomeCreateForm extends HTMLElement {
           font-size: 0.95rem;
         }
 
+        .home-status {
+          margin: 0;
+          padding: 0.8rem 1rem;
+          border-radius: 14px;
+          font-size: 0.95rem;
+          font-weight: 600;
+        }
+
+        .state-ready {
+          color: #166534;
+          background: #dcfce7;
+        }
+
+        .state-pending {
+          color: #92400e;
+          background: #fef3c7;
+        }
+
+        .state-failed,
+        .state-deleting {
+          color: #991b1b;
+          background: #fee2e2;
+        }
+
         .error {
           min-height: 1.2rem;
           color: #b91c1c;
@@ -214,7 +287,7 @@ class HomeCreateForm extends HTMLElement {
       </style>
       <section class="panel">
         <h2>Select Or Create Home</h2>
-        <p>Choose an existing home or create a new one with the Wi-Fi details for that home. MQTT credentials will be generated automatically by the backend.</p>
+        <p>Choose an existing home or create a new one with the Wi-Fi details for that home. MQTT credentials are generated immediately, and broker provisioning completes asynchronously in the background.</p>
         <div class="badge">Signed in as ${escapeHtml(username)}</div>
         <section class="section">
           <h3>Previously Created Homes</h3>
@@ -260,6 +333,7 @@ class HomeCreateForm extends HTMLElement {
     if (this.existingHomeSelect) {
       this.existingHomeSelect.addEventListener("change", () => {
         this.selectedHomeId = this.existingHomeSelect.value;
+        this.setSubmitting(this.isSubmitting);
       });
     }
     this.form.addEventListener("submit", (event) => this.handleSubmit(event));
@@ -348,6 +422,14 @@ class HomeCreateForm extends HTMLElement {
       this.setError("Select a home to continue.");
       return;
     }
+    if (!canSelectHome(home)) {
+      this.setError(
+        homeProvisionState(home) === "failed"
+          ? "This home failed MQTT provisioning. Delete it or wait for recovery before enrolling devices."
+          : "This home is currently being deleted.",
+      );
+      return;
+    }
 
     this.setError("");
     this.dispatchEvent(
@@ -371,7 +453,7 @@ class HomeCreateForm extends HTMLElement {
     }
 
     const confirmed = window.confirm(
-      `Delete home "${home.name}" permanently? All devices in this home will also be deleted.`,
+      `Delete home "${home.name}"? Devices will disappear immediately and MQTT cleanup will continue in the background.`,
     );
     if (!confirmed) {
       return;
@@ -428,8 +510,15 @@ class HomeCreateForm extends HTMLElement {
     this.isSubmitting = isSubmitting;
     this.submitBtn.disabled = isSubmitting;
     this.submitBtn.textContent = isSubmitting ? "Creating Home..." : "Create Home";
+    const selectedHome = this.homes.find((home) => String(home.home_id) === String(this.selectedHomeId || this.existingHomeSelect?.value || ""));
     if (this.selectBtn) {
-      this.selectBtn.disabled = isSubmitting || this.isLoadingHomes || this.isDeletingHome || this.homes.length === 0;
+      this.selectBtn.disabled =
+        isSubmitting ||
+        this.isLoadingHomes ||
+        this.isDeletingHome ||
+        this.homes.length === 0 ||
+        !selectedHome ||
+        !canSelectHome(selectedHome);
     }
     if (this.existingHomeSelect) {
       this.existingHomeSelect.disabled = isSubmitting || this.isLoadingHomes || this.isDeletingHome || this.homes.length === 0;

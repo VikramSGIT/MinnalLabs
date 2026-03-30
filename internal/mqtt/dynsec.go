@@ -99,6 +99,18 @@ func sendDynsecCommand(command map[string]interface{}) error {
 	}
 }
 
+func ignoreMissingDynsecError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	message := strings.ToLower(strings.TrimSpace(err.Error()))
+	return strings.Contains(message, "not found") ||
+		strings.Contains(message, "does not exist") ||
+		strings.Contains(message, "unknown client") ||
+		strings.Contains(message, "unknown role")
+}
+
 func homeRoleName(userID, homeID uint) string {
 	return fmt.Sprintf("home_%d_%d", userID, homeID)
 }
@@ -181,17 +193,19 @@ func CleanupHomeAccess(userID, homeID uint, username string) error {
 	roleName := homeRoleName(userID, homeID)
 	var errs []string
 
-	if err := sendDynsecCommand(map[string]interface{}{
-		"command":  "deleteClient",
-		"username": username,
-	}); err != nil {
-		errs = append(errs, err.Error())
+	if strings.TrimSpace(username) != "" {
+		if err := sendDynsecCommand(map[string]interface{}{
+			"command":  "deleteClient",
+			"username": username,
+		}); err != nil && !ignoreMissingDynsecError(err) {
+			errs = append(errs, err.Error())
+		}
 	}
 
 	if err := sendDynsecCommand(map[string]interface{}{
 		"command":  "deleteRole",
 		"rolename": roleName,
-	}); err != nil {
+	}); err != nil && !ignoreMissingDynsecError(err) {
 		errs = append(errs, err.Error())
 	}
 

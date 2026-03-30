@@ -18,6 +18,7 @@ import (
 	"github.com/iot-backend/internal/db"
 	"github.com/iot-backend/internal/enrollment"
 	"github.com/iot-backend/internal/google"
+	"github.com/iot-backend/internal/homejobs"
 	"github.com/iot-backend/internal/middleware"
 	"github.com/iot-backend/internal/mqtt"
 	"github.com/iot-backend/internal/oauth"
@@ -38,6 +39,8 @@ func main() {
 
 	mqtt.InitMQTT(cfg)
 	ota.StartWorker(cfg)
+	workerCtx, workerCancel := context.WithCancel(context.Background())
+	homejobs.NewWorker(db.DB).Start(workerCtx)
 
 	oauth.InitOAuth(cfg)
 
@@ -94,6 +97,7 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 	log.Println("Shutting down server...")
+	workerCancel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

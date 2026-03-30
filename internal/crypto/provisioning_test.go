@@ -56,15 +56,16 @@ func TestEncryptProvisioningBundle_RoundTrip(t *testing.T) {
 	}
 
 	payload := ProvisioningPayload{
-		DeviceID:     "42",
-		UserID:       "7",
-		HomeID:       "3",
-		MQTTHost:     "mqtt.example.com",
-		MQTTPort:     "1883",
-		MQTTUsername: "home_7_3_abc123",
-		MQTTPassword: "supersecretpassword",
-		WiFiSSID:     "TestNetwork",
-		WiFiPassword: "wifipass123",
+		DeviceID:                "42",
+		UserID:                  "7",
+		HomeID:                  "3",
+		MQTTHost:                "mqtt.example.com",
+		MQTTPort:                "1883",
+		MQTTUsername:            "home_7_3_abc123",
+		MQTTPassword:            "supersecretpassword",
+		MQTTConnectDelaySeconds: 15,
+		WiFiSSID:                "TestNetwork",
+		WiFiPassword:            "wifipass123",
 	}
 
 	b64Pub := base64.StdEncoding.EncodeToString(devicePriv.PublicKey().Bytes())

@@ -18,15 +18,16 @@ const provisioningVersion byte = 1
 
 // ProvisioningPayload is the plaintext that gets encrypted inside the bundle.
 type ProvisioningPayload struct {
-	DeviceID     string `json:"device_id"`
-	UserID       string `json:"user_id"`
-	HomeID       string `json:"home_id"`
-	MQTTHost     string `json:"mqtt_host"`
-	MQTTPort     string `json:"mqtt_port"`
-	MQTTUsername string `json:"mqtt_username"`
-	MQTTPassword string `json:"mqtt_password"`
-	WiFiSSID     string `json:"wifi_ssid"`
-	WiFiPassword string `json:"wifi_password"`
+	DeviceID                string `json:"device_id"`
+	UserID                  string `json:"user_id"`
+	HomeID                  string `json:"home_id"`
+	MQTTHost                string `json:"mqtt_host"`
+	MQTTPort                string `json:"mqtt_port"`
+	MQTTUsername            string `json:"mqtt_username"`
+	MQTTPassword            string `json:"mqtt_password"`
+	MQTTConnectDelaySeconds int    `json:"mqtt_connect_delay_seconds"`
+	WiFiSSID                string `json:"wifi_ssid"`
+	WiFiPassword            string `json:"wifi_password"`
 }
 
 // ParseDevicePublicKey decodes a base64-encoded 32-byte X25519 public key.

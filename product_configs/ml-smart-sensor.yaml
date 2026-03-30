@@ -131,6 +131,10 @@ globals:
     restore_value: yes
     max_restore_data_length: 8
     initial_value: '"1883"'
+  - id: g_mqtt_connect_delay_seconds
+    type: int
+    restore_value: yes
+    initial_value: '15'
   - id: g_wifi_ssid
     type: std::string
     restore_value: yes
@@ -313,7 +317,8 @@ esp32_ble_server:
                 if (!secure_ble::apply_pending_provisioning(
                       id(g_user_id), id(g_home_id), id(g_device_id),
                       id(g_mqtt_url), id(g_mqtt_port), id(g_mqtt_username),
-                      id(g_mqtt_password), id(g_wifi_ssid), id(g_wifi_password),
+                      id(g_mqtt_password), id(g_mqtt_connect_delay_seconds),
+                      id(g_wifi_ssid), id(g_wifi_password),
                       apply_error)) {
                   ESP_LOGW("secure_ble", "Restart ignored because provisioning is not ready: %s", apply_error.c_str());
                   return;
@@ -411,6 +416,7 @@ script:
       - globals.set: { id: g_mqtt_username, value: '""' }
       - globals.set: { id: g_mqtt_password, value: '""' }
       - globals.set: { id: g_mqtt_port, value: '"1883"' }
+      - globals.set: { id: g_mqtt_connect_delay_seconds, value: '15' }
       - globals.set: { id: g_wifi_ssid, value: '""' }
       - globals.set: { id: g_wifi_password, value: '""' }
       - globals.set: { id: g_device_private_key_b64, value: '""' }
@@ -438,6 +444,7 @@ wifi:
   ssid: "dummy"
   password: ""
   on_connect:
-    - logger.log: "WiFi connected. Enabling MQTT."
-    - delay: 2s
+    - logger.log: "WiFi connected. Waiting before enabling MQTT."
+    - delay: !lambda |-
+        return id(g_mqtt_connect_delay_seconds) > 0 ? id(g_mqtt_connect_delay_seconds) * 1000 : 0;
     - mqtt.enable:

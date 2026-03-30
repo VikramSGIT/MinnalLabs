@@ -26,17 +26,63 @@ type AdminUser struct {
 func (AdminUser) TableName() string { return "admin_users" }
 
 type Home struct {
-	ID           uint           `gorm:"primarykey" json:"id"`
-	CreatedAt    time.Time      `json:"created_at"`
-	UpdatedAt    time.Time      `json:"updated_at"`
-	DeletedAt    gorm.DeletedAt `gorm:"index" json:"-"`
-	UserID       uint           `json:"user_id"`
-	Name         string         `json:"name"`
-	WiFiSSID     string         `gorm:"column:wifi_ssid" json:"wifi_ssid"`
-	WiFiPassword string         `gorm:"column:wifi_password" json:"-"`
-	MQTTUsername string         `gorm:"column:mqtt_username" json:"mqtt_username"`
-	MQTTPassword string         `gorm:"column:mqtt_password" json:"-"`
-	Devices      []Device       `json:"devices,omitempty"`
+	ID                 uint           `gorm:"primarykey" json:"id"`
+	CreatedAt          time.Time      `json:"created_at"`
+	UpdatedAt          time.Time      `json:"updated_at"`
+	DeletedAt          gorm.DeletedAt `gorm:"index" json:"-"`
+	UserID             uint           `json:"user_id"`
+	Name               string         `json:"name"`
+	WiFiSSID           string         `gorm:"column:wifi_ssid" json:"wifi_ssid"`
+	WiFiPassword       string         `gorm:"column:wifi_password" json:"-"`
+	MQTTUsername       string         `gorm:"column:mqtt_username" json:"mqtt_username"`
+	MQTTPassword       string         `gorm:"column:mqtt_password" json:"-"`
+	MQTTProvisionState string         `gorm:"column:mqtt_provision_state" json:"mqtt_provision_state"`
+	MQTTProvisionError string         `gorm:"column:mqtt_provision_error" json:"mqtt_provision_error,omitempty"`
+	MQTTProvisionedAt  *time.Time     `gorm:"column:mqtt_provisioned_at" json:"mqtt_provisioned_at,omitempty"`
+	Devices            []Device       `json:"devices,omitempty"`
+}
+
+const (
+	HomeMQTTProvisionStatePending  = "pending"
+	HomeMQTTProvisionStateReady    = "ready"
+	HomeMQTTProvisionStateFailed   = "failed"
+	HomeMQTTProvisionStateDeleting = "deleting"
+
+	HomeMQTTJobOperationProvision = "provision"
+	HomeMQTTJobOperationCleanup   = "cleanup"
+
+	HomeMQTTJobStatusPending = "pending"
+	HomeMQTTJobStatusRunning = "running"
+	HomeMQTTJobStatusFailed  = "failed"
+)
+
+func (h Home) MQTTState() string {
+	state := strings.TrimSpace(h.MQTTProvisionState)
+	switch state {
+	case HomeMQTTProvisionStatePending, HomeMQTTProvisionStateReady, HomeMQTTProvisionStateFailed, HomeMQTTProvisionStateDeleting:
+		return state
+	default:
+		if h.DeletedAt.Valid {
+			return HomeMQTTProvisionStateDeleting
+		}
+		if strings.TrimSpace(h.MQTTUsername) == "" || strings.TrimSpace(h.MQTTPassword) == "" {
+			return HomeMQTTProvisionStateFailed
+		}
+		return HomeMQTTProvisionStateReady
+	}
+}
+
+func (h Home) AllowsDeviceProvisioning() bool {
+	switch h.MQTTState() {
+	case HomeMQTTProvisionStatePending, HomeMQTTProvisionStateReady:
+		return true
+	default:
+		return false
+	}
+}
+
+func (h Home) HasMQTTCredentials() bool {
+	return strings.TrimSpace(h.MQTTUsername) != "" && strings.TrimSpace(h.MQTTPassword) != ""
 }
 
 type Product struct {
@@ -127,6 +173,21 @@ type FirmwareRolloutDevice struct {
 }
 
 func (FirmwareRolloutDevice) TableName() string { return "firmware_rollout_devices" }
+
+type HomeMQTTJob struct {
+	ID        uint       `gorm:"primaryKey"`
+	HomeID    uint       `gorm:"column:home_id"`
+	Operation string     `gorm:"column:operation"`
+	Status    string     `gorm:"column:status"`
+	Attempts  int        `gorm:"column:attempts"`
+	NextRunAt time.Time  `gorm:"column:next_run_at"`
+	ClaimedAt *time.Time `gorm:"column:claimed_at"`
+	LastError string     `gorm:"column:last_error"`
+	CreatedAt time.Time  `gorm:"column:created_at"`
+	UpdatedAt time.Time  `gorm:"column:updated_at"`
+}
+
+func (HomeMQTTJob) TableName() string { return "home_mqtt_jobs" }
 
 // OAuth models
 
