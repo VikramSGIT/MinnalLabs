@@ -89,6 +89,9 @@ services:
       OAUTH_CLIENT_SECRET: stress-oauth-secret
       VALKEY_ADDR: valkey:6379
       FIRMWARE_STORAGE_DIR: /app/firmware
+      GOOGLEAUTH_CLIENT_ID: google-client
+      GOOGLEAUTH_CLIENT_SECRET: stress-google-secret
+      GOOGLEAUTH_REDIRECT_URI: http://localhost/auth/google/callback
       PPROF_ENABLED: "true"
       PPROF_ADDR: 0.0.0.0:6060
     volumes:
