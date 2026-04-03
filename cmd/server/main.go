@@ -65,9 +65,7 @@ func main() {
 	enrollment.SetupEnrollmentRoutes(r, cfg)
 	admin.SetupAdminRoutes(r, cfg)
 
-	if cfg.GoogleAuth.ClientID != "" {
-		googleauth.SetupGoogleAuthRoutes(r, cfg)
-	}
+	googleauth.SetupGoogleAuthRoutes(r, cfg)
 	if strings.EqualFold(strings.TrimSpace(cfg.Server.Profile), "stress") {
 		googleauth.SetupTestGoogleLoginRoute(r, cfg)
 	}

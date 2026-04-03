@@ -43,6 +43,11 @@ func SetupGoogleAuthRoutes(r *gin.Engine, cfg *config.Config) {
 	oc := oauthConfig(cfg)
 
 	r.GET("/auth/google/login", func(c *gin.Context) {
+		if cfg.GoogleAuth.ClientID == "" || cfg.GoogleAuth.ClientSecret == "" {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Google Sign-In is not configured"})
+			return
+		}
+
 		stateToken, err := generateRandomToken(32)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate state"})
@@ -57,6 +62,11 @@ func SetupGoogleAuthRoutes(r *gin.Engine, cfg *config.Config) {
 	})
 
 	r.GET("/auth/google/callback", func(c *gin.Context) {
+		if cfg.GoogleAuth.ClientID == "" || cfg.GoogleAuth.ClientSecret == "" {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Google Sign-In is not configured"})
+			return
+		}
+
 		stateToken := c.Query("state")
 		if stateToken == "" {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "missing state parameter"})
