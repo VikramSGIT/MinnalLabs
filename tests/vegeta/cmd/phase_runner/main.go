@@ -318,7 +318,7 @@ func (r *Runner) runGoogleOAuthEnroll() error {
 func (r *Runner) runGoogleSignInEnroll() error {
 	err := r.runScheduled(func(ctx context.Context, index int) error {
 		googleSub := fmt.Sprintf("google-sub-%s-%d", r.cfg.RunID, index)
-		email := fmt.Sprintf("stress_%s_%d@example.com", r.cfg.RunID, index)
+		email := fmt.Sprintf("stress_gsign_%s_%d@example.com", r.cfg.RunID, index)
 
 		parsed, sessionToken, ok := r.testGoogleLogin(ctx, googleSub, email)
 		if !ok {
@@ -332,17 +332,19 @@ func (r *Runner) runGoogleSignInEnroll() error {
 			return nil
 		}
 
-		// Authorize + exchange OAuth token so the user can do fulfillment
+		// Authorize + exchange OAuth token to verify the full flow works
 		code, ok := r.authorizeCode(ctx, sessionToken, fmt.Sprintf("%d-google-signin-enroll", index))
 		if !ok {
 			return nil
 		}
-		token, ok := r.exchangeOAuthToken(ctx, code)
+		_, ok = r.exchangeOAuthToken(ctx, code)
 		if !ok {
 			return nil
 		}
 
-		r.state.UpsertUser(index, parsed.UserID, parsed.Username, "", sessionToken, token.AccessToken, token.RefreshToken)
+		// Do NOT call UpsertUser — these Google users are separate from the
+		// password-based users created by create_users. Overwriting shared
+		// state would break downstream phases (delete_users_self etc.).
 		r.metrics.RecordCounter("phase_google_signin_enrolled", 1, r.scenario)
 		return nil
 	})
