@@ -222,6 +222,8 @@ func (r *Runner) run() error {
 	switch r.cfg.Phase.Name {
 	case "create_users":
 		return r.runCreateUsers()
+	case "google_oauth_enroll":
+		return r.runGoogleOAuthEnroll()
 	case "create_homes":
 		return r.runCreateHomes()
 	case "enroll_devices":
@@ -268,6 +270,41 @@ func (r *Runner) runCreateUsers() error {
 			return nil
 		}
 		r.state.UpsertUser(index, created.UserID, credentials.Username, credentials.Password, sessionToken, token.AccessToken, token.RefreshToken)
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	return r.evaluateThresholds()
+}
+
+func (r *Runner) runGoogleOAuthEnroll() error {
+	err := r.runScheduled(func(ctx context.Context, index int) error {
+		session, ok := r.ensureSessionForSlot(ctx, index)
+		if !ok {
+			return nil
+		}
+
+		code, ok := r.authorizeCode(ctx, session.SessionToken, fmt.Sprintf("%d-google-oauth-enroll", index))
+		if !ok {
+			return nil
+		}
+		r.metrics.RecordCounter("phase_google_oauth_authorized", 1, r.scenario)
+
+		token, ok := r.exchangeOAuthToken(ctx, code)
+		if !ok {
+			return nil
+		}
+		r.metrics.RecordCounter("phase_google_oauth_token_exchanged", 1, r.scenario)
+
+		r.state.UpdateOAuth(index, token.AccessToken, token.RefreshToken)
+
+		// Validate token by issuing a SYNC fulfillment call
+		_, ok = r.googleFulfillment(ctx, token.AccessToken, "action.devices.SYNC", map[string]any{})
+		r.metrics.RecordCheck(r.scenario, "Google OAuth SYNC validation succeeded", ok)
+		if ok {
+			r.metrics.RecordCounter("phase_google_oauth_enrolled", 1, r.scenario)
+		}
 		return nil
 	})
 	if err != nil {

@@ -106,7 +106,7 @@ services:
       timeout: 5s
       retries: 30
 
-  k6:
+  vegeta:
     build:
       context: .
       dockerfile: tests/vegeta/Dockerfile.runner
