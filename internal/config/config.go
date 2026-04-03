@@ -56,9 +56,9 @@ type Config struct {
 		StorageDir string
 	}
 	GoogleAuth struct {
-		ClientID     string
-		ClientSecret string
-		RedirectURI  string
+		ClientID     string `mapstructure:"client_id"`
+		ClientSecret string `mapstructure:"client_secret"`
+		RedirectURI  string `mapstructure:"redirect_uri"`
 	}
 	Pprof struct {
 		Enabled bool
