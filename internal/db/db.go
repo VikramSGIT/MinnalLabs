@@ -35,9 +35,10 @@ func InitDB(cfg *config.Config) {
 	if err != nil {
 		log.Fatalf("Failed to get underlying sql.DB: %v", err)
 	}
-	sqlDB.SetMaxOpenConns(25)
-	sqlDB.SetMaxIdleConns(10)
-	sqlDB.SetConnMaxLifetime(30 * time.Minute)
+	sqlDB.SetMaxOpenConns(150)
+	sqlDB.SetMaxIdleConns(75)
+	sqlDB.SetConnMaxLifetime(5 * time.Minute)
+	sqlDB.SetConnMaxIdleTime(2 * time.Minute)
 
 	log.Println("Connected to database successfully")
 }
@@ -84,4 +85,15 @@ func RunMigrations() {
 	}
 
 	log.Printf("Database migrations completed (%d applied, %d already up to date)", applied, len(files)-applied)
+}
+
+func RunSQLFile(path string) {
+	sqlBytes, err := os.ReadFile(path)
+	if err != nil {
+		log.Fatalf("Failed to read SQL file %s: %v", path, err)
+	}
+	if err := DB.Exec(string(sqlBytes)).Error; err != nil {
+		log.Fatalf("Failed to run SQL file %s: %v", path, err)
+	}
+	log.Printf("Applied SQL file %s", path)
 }

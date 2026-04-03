@@ -3,6 +3,7 @@ package admin
 import (
 	"crypto/md5"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -16,10 +17,13 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/iot-backend/internal/config"
+	"github.com/iot-backend/internal/deletion"
 	"github.com/iot-backend/internal/db"
 	"github.com/iot-backend/internal/models"
 	"github.com/iot-backend/internal/oauth"
 	"github.com/iot-backend/internal/ota"
+	"github.com/iot-backend/internal/state"
+	"gorm.io/gorm"
 )
 
 var cfg *config.Config
@@ -36,6 +40,7 @@ func SetupAdminRoutes(r *gin.Engine, appCfg *config.Config) {
 		api.GET("/products/:productID/rollouts", listProductRollouts)
 		api.POST("/products/:productID/firmware", uploadFirmware)
 		api.POST("/products/:productID/rollout", rolloutFirmware)
+		api.DELETE("/users/:userID", deleteUser)
 	}
 }
 
@@ -73,6 +78,53 @@ func parseProductID(c *gin.Context) (uint, bool) {
 		return 0, false
 	}
 	return uint(productIDValue), true
+}
+
+func parseUserID(c *gin.Context) (uint, bool) {
+	userIDValue, err := strconv.ParseUint(c.Param("userID"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid user id"})
+		return 0, false
+	}
+	return uint(userIDValue), true
+}
+
+func deleteUser(c *gin.Context) {
+	userID, ok := parseUserID(c)
+	if !ok {
+		return
+	}
+
+	sessionUser, ok := oauth.CurrentSessionUser(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	result, err := deletion.ScheduleUserDeletion(db.DB, userID, time.Now().UTC())
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
+			return
+		}
+		log.Printf("Failed to delete user %d: %v", userID, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete user"})
+		return
+	}
+
+	state.DeleteSessionsForUser(userID)
+	if userID == sessionUser.UserID {
+		oauth.DestroyCurrentSession(c)
+	}
+	if err := oauth.PurgeTokensForUser(fmt.Sprintf("%d", userID)); err != nil {
+		log.Printf("Failed to purge oauth tokens for deleted user %d: %v", userID, err)
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"deleted":         true,
+		"user_id":         result.UserID,
+		"queued_home_ids": result.HomeIDs,
+	})
 }
 
 func sanitizeVersion(version string) string {

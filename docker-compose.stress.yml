@@ -3,13 +3,15 @@ name: iot_backend_stress
 services:
   postgres:
     image: postgres:16-alpine
+    command: ["postgres", "-c", "max_connections=300", "-c", "shared_buffers=128MB", "-c", "work_mem=8MB"]
+    shm_size: 256m
     environment:
       POSTGRES_DB: iotdb
       POSTGRES_USER: iotuser
       POSTGRES_PASSWORD: iotpassword
     volumes:
       - stress_postgresdata:/var/lib/postgresql/data
-      - ./docker/stress/postgres:/docker-entrypoint-initdb.d:ro
+      - ./docker/stress/postgres/001_oauth_client.sql:/docker-entrypoint-initdb.d/001_oauth_client.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 5s
@@ -104,8 +106,10 @@ services:
   k6:
     build:
       context: .
-      dockerfile: tests/k6/Dockerfile.runner
-    working_dir: /app/tests/k6
+      dockerfile: tests/vegeta/Dockerfile.runner
+    working_dir: /app/tests/vegeta
+    env_file:
+      - ./tests/vegeta/config.env
     environment:
       BASE_URL: http://backend:8080
       PPROF_BASE_URL: http://backend:6060
@@ -120,35 +124,6 @@ services:
       DB_PASSWORD: iotpassword
       DB_NAME: iotdb
       DB_SSLMODE: disable
-      K6_PRODUCT_ID: 1
-      K6_PRODUCT_NAME: ml-smart-sensor-v1
-      K6_VUS: ${K6_VUS:-}
-      K6_DURATION: ${K6_DURATION:-}
-      K6_RAMP_UP: ${K6_RAMP_UP:-}
-      K6_RAMP_DOWN: ${K6_RAMP_DOWN:-}
-      K6_USER_FLOW_VUS: ${K6_USER_FLOW_VUS:-100}
-      K6_USER_FLOW_ITERATIONS: ${K6_USER_FLOW_ITERATIONS:-100}
-      K6_USER_FLOW_MAX_DURATION: ${K6_USER_FLOW_MAX_DURATION:-20m}
-      K6_HOME_BURST_VUS: ${K6_HOME_BURST_VUS:-100}
-      K6_HOME_BURST_START: ${K6_HOME_BURST_START:-10s}
-      K6_HOME_BURST_ITERATIONS: ${K6_HOME_BURST_ITERATIONS:-1}
-      K6_HOME_BURST_MAX_DURATION: ${K6_HOME_BURST_MAX_DURATION:-20m}
-      K6_FULFILLMENT_PARALLEL_VUS: ${K6_FULFILLMENT_PARALLEL_VUS:-100}
-      K6_FULFILLMENT_START: ${K6_FULFILLMENT_START:-10s}
-      K6_FULFILLMENT_PARALLEL_ITERATIONS: ${K6_FULFILLMENT_PARALLEL_ITERATIONS:-1000}
-      K6_FULFILLMENT_MAX_DURATION: ${K6_FULFILLMENT_MAX_DURATION:-10m}
-      K6_DEVICE_STREAM_VUS: ${K6_DEVICE_STREAM_VUS:-10}
-      K6_DEVICE_STREAM_ITERATIONS: ${K6_DEVICE_STREAM_ITERATIONS:-20}
-      K6_DEVICE_STREAM_START: ${K6_DEVICE_STREAM_START:-10s}
-      K6_DEVICE_STREAM_DELETE_START: ${K6_DEVICE_STREAM_DELETE_START:-30s}
-      K6_DEVICE_STREAM_INTERVAL_MS: ${K6_DEVICE_STREAM_INTERVAL_MS:-1000}
-      K6_DEVICE_STREAM_MAX_DURATION: ${K6_DEVICE_STREAM_MAX_DURATION:-10m}
-      ASYNC_HOME_READY_TIMEOUT_MS: ${ASYNC_HOME_READY_TIMEOUT_MS:-90000}
-      ASYNC_HOME_READY_POLL_MS: ${ASYNC_HOME_READY_POLL_MS:-2000}
-      ASYNC_HOME_EARLY_READY_CHECK_MS: ${ASYNC_HOME_EARLY_READY_CHECK_MS:-9000}
-      ASYNC_DRAIN_WAIT_SECONDS: ${ASYNC_DRAIN_WAIT_SECONDS:-120}
-      ASYNC_DRAIN_POLL_INTERVAL_SECONDS: ${ASYNC_DRAIN_POLL_INTERVAL_SECONDS:-5}
-      PPROF_CPU_SECONDS: ${PPROF_CPU_SECONDS:-30}
     volumes:
       - .:/app
     depends_on:

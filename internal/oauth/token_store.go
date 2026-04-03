@@ -4,11 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	gooauth2 "github.com/go-oauth2/oauth2/v4"
 	oauthmodels "github.com/go-oauth2/oauth2/v4/models"
+	"github.com/iot-backend/internal/db"
 	localmodels "github.com/iot-backend/internal/models"
+	"github.com/iot-backend/internal/state"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 )
@@ -474,4 +477,46 @@ func expiryReached(createdAt time.Time, expiresIn time.Duration, now time.Time) 
 		return true
 	}
 	return !createdAt.Add(expiresIn).After(now)
+}
+
+func PurgeTokensForUser(userID string) error {
+	userID = strings.TrimSpace(userID)
+	if userID == "" || db.DB == nil {
+		return nil
+	}
+
+	ctx := context.Background()
+	var records []localmodels.OAuthToken
+	if err := db.DB.Where("user_id = ?", userID).Find(&records).Error; err != nil {
+		return err
+	}
+	if len(records) == 0 {
+		return nil
+	}
+
+	if err := db.DB.Where("user_id = ?", userID).Delete(&localmodels.OAuthToken{}).Error; err != nil {
+		return err
+	}
+
+	rdb := state.RedisClient()
+	if rdb == nil {
+		return nil
+	}
+
+	keys := make([]string, 0, len(records)*3)
+	for _, record := range records {
+		if code := strings.TrimSpace(record.Code); code != "" {
+			keys = append(keys, lookupCacheKey(lookupCode, code))
+		}
+		if access := strings.TrimSpace(record.Access); access != "" {
+			keys = append(keys, lookupCacheKey(lookupAccess, access))
+		}
+		if refresh := strings.TrimSpace(record.Refresh); refresh != "" {
+			keys = append(keys, lookupCacheKey(lookupRefresh, refresh))
+		}
+	}
+	if len(keys) == 0 {
+		return nil
+	}
+	return rdb.Del(ctx, keys...).Err()
 }

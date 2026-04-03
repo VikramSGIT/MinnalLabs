@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sync"
 	"time"
 
 	"github.com/iot-backend/internal/models"
@@ -15,10 +16,9 @@ import (
 )
 
 const (
-	WorkerInterval                = 10 * time.Second
-	// Process a larger batch each tick so bursty home creation still respects the
-	// 10s queue delay without forcing readiness past the stress-timeout window.
-	jobBatchSize                  = 64
+	WorkerInterval                = 2 * time.Second
+	// Process a larger batch each tick so bursty home creation is handled quickly.
+	jobBatchSize                  = 128
 	staleClaimAfter               = 2 * time.Minute
 	maxProvisionAttempts          = 6
 	DeviceMQTTConnectDelaySeconds = 15
@@ -33,7 +33,7 @@ func NewWorker(db *gorm.DB) *Worker {
 }
 
 func initialNextRunAt(now time.Time) time.Time {
-	return now.Add(WorkerInterval)
+	return now.Add(1 * time.Second)
 }
 
 func EnqueueProvision(tx *gorm.DB, homeID uint) error {
@@ -104,11 +104,24 @@ func (w *Worker) runOnce() {
 		return
 	}
 
-	for _, job := range jobs {
-		if err := w.processJob(job); err != nil {
-			log.Printf("Home MQTT worker failed processing job %d (%s): %v", job.ID, job.Operation, err)
-		}
+	if len(jobs) == 0 {
+		return
 	}
+
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 16)
+	for _, job := range jobs {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(j models.HomeMQTTJob) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			if err := w.processJob(j); err != nil {
+				log.Printf("Home MQTT worker failed processing job %d (%s): %v", j.ID, j.Operation, err)
+			}
+		}(job)
+	}
+	wg.Wait()
 }
 
 func (w *Worker) requeueStaleClaims() error {
@@ -255,14 +268,30 @@ func (w *Worker) processCleanupJob(job models.HomeMQTTJob) error {
 		deviceIDs = append(deviceIDs, device.ID)
 	}
 
+	now := time.Now().UTC()
 	if err := w.db.Transaction(func(tx *gorm.DB) error {
 		if len(deviceIDs) > 0 {
-			if err := tx.Unscoped().Where("id IN ?", deviceIDs).Delete(&models.Device{}).Error; err != nil {
-				return fmt.Errorf("hard delete devices: %w", err)
+			if err := tx.Where("id IN ? AND deleted_at IS NULL", deviceIDs).Delete(&models.Device{}).Error; err != nil {
+				return fmt.Errorf("soft delete devices: %w", err)
 			}
 		}
-		if err := tx.Unscoped().Delete(&models.Home{}, home.ID).Error; err != nil {
-			return fmt.Errorf("hard delete home: %w", err)
+		if err := tx.Unscoped().Model(&models.Home{}).
+			Where("id = ?", home.ID).
+			Updates(map[string]interface{}{
+				"mqtt_username":        "",
+				"mqtt_password":        "",
+				"mqtt_provision_state": models.HomeMQTTProvisionStateDeleting,
+				"mqtt_provision_error": "",
+				"mqtt_provisioned_at":  nil,
+				"updated_at":           now,
+			}).Error; err != nil {
+			return fmt.Errorf("clear home mqtt credentials: %w", err)
+		}
+		if err := tx.Where("id = ? AND deleted_at IS NULL", home.ID).Delete(&models.Home{}).Error; err != nil {
+			return fmt.Errorf("soft delete home: %w", err)
+		}
+		if err := tx.Delete(&models.HomeMQTTJob{}, job.ID).Error; err != nil {
+			return fmt.Errorf("delete cleanup job: %w", err)
 		}
 		return nil
 	}); err != nil {
@@ -365,5 +394,5 @@ func retryDelay(attempts int) time.Duration {
 	if attempts > 6 {
 		attempts = 6
 	}
-	return time.Duration(attempts) * WorkerInterval
+	return time.Duration(attempts) * 5 * time.Second
 }

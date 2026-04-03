@@ -1,8 +1,8 @@
-FROM grafana/k6:latest AS k6bin
-
 FROM golang:1.25-alpine
 
 WORKDIR /app
+
+ENV PATH="/usr/local/go/bin:${PATH}"
 
 RUN apk add --no-cache \
         bash \
@@ -11,8 +11,7 @@ RUN apk add --no-cache \
         graphviz \
         postgresql-client \
         python3 \
-    && update-ca-certificates
+    && update-ca-certificates \
+    && ln -sf /usr/local/go/bin/go /usr/local/bin/go
 
-COPY --from=k6bin /usr/bin/k6 /usr/local/bin/k6
-
-ENTRYPOINT ["/app/tests/k6/run.sh"]
+ENTRYPOINT ["bash", "/app/tests/vegeta/run.sh"]

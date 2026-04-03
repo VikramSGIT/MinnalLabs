@@ -22,3 +22,5 @@ vendor/
 # Firmware uploads
 firmware/*
 !firmware/.gitkeep
+
+results/

@@ -19,6 +19,7 @@ WORKDIR /app
 
 COPY --from=builder /app/iot-server .
 COPY --from=builder /app/migrations ./migrations
+COPY --from=builder /app/docker/stress/postgres ./docker/stress/postgres
 
 # Expose HTTP port
 EXPOSE 8080

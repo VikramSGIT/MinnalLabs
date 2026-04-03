@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
-	"github.com/iot-backend/internal/db"
 	"github.com/iot-backend/internal/models"
 	"github.com/iot-backend/internal/mqtt"
 	"github.com/iot-backend/internal/oauth"
@@ -99,37 +98,26 @@ func parseCompoundID(compoundID string) (uint, string, error) {
 	return uint(id), parts[1], nil
 }
 
-// handleSync reads device IDs and product info from Valkey, names from DB (SYNC is infrequent).
+// handleSync reads only the current user's device metadata from Valkey and
+// batches the remaining work so SYNC doesn't fan out into per-device cache hits.
 func handleSync(agentUserID string, userID uint) interface{} {
-	devices := state.GetAllDevices()
-	filteredDevices := make([]state.DeviceInfo, 0, len(devices))
-	for _, d := range devices {
-		if d.UserID == userID {
-			filteredDevices = append(filteredDevices, d)
-		}
-	}
+	devices := state.GetDevicesForUser(userID)
 
-	deviceIDs := make([]uint, 0, len(filteredDevices))
-	for _, d := range filteredDevices {
-		deviceIDs = append(deviceIDs, d.ID)
-	}
-
-	nameMap := make(map[uint]string, len(deviceIDs))
-	if len(deviceIDs) > 0 {
-		var dbDevices []models.Device
-		db.DB.Select("id, name").Where("id IN ?", deviceIDs).Find(&dbDevices)
-		for _, dev := range dbDevices {
-			nameMap[dev.ID] = dev.Name
-		}
-	}
-
+	productCaps := make(map[uint][]state.CapInfo)
 	var googleDevices []map[string]interface{}
-	for _, d := range filteredDevices {
-		caps, err := state.GetProductCaps(d.ProductID)
-		if err != nil {
-			continue
+	for _, d := range devices {
+		caps, ok := productCaps[d.ProductID]
+		if !ok {
+			loadedCaps, err := state.GetProductCaps(d.ProductID)
+			if err != nil {
+				productCaps[d.ProductID] = nil
+				continue
+			}
+			productCaps[d.ProductID] = loadedCaps
+			caps = loadedCaps
 		}
-		deviceName := nameMap[d.ID]
+
+		deviceName := d.Name
 		for _, cap := range caps {
 			compoundID := fmt.Sprintf("%d:%s", d.ID, cap.EsphomeKey)
 			traitName := "action.devices.traits." + cap.TraitType

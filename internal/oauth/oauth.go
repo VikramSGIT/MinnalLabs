@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	oautherrors "github.com/go-oauth2/oauth2/v4/errors"
@@ -18,6 +19,7 @@ import (
 	"github.com/go-oauth2/oauth2/v4/server"
 	"github.com/go-oauth2/oauth2/v4/store"
 	"github.com/iot-backend/internal/config"
+	"github.com/iot-backend/internal/deletion"
 	"github.com/iot-backend/internal/db"
 	localmodels "github.com/iot-backend/internal/models"
 	"github.com/iot-backend/internal/state"
@@ -307,6 +309,37 @@ func SetupOAuthRoutes(r *gin.Engine, cfg *config.Config) {
 				"user_id":  sessionUser.UserID,
 				"username": sessionUser.Username,
 				"is_admin": sessionUser.IsAdmin,
+			})
+		})
+		protected.DELETE("/me", func(c *gin.Context) {
+			sessionUser, ok := CurrentSessionUser(c)
+			if !ok {
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+				return
+			}
+
+			result, err := deletion.ScheduleUserDeletion(db.DB, sessionUser.UserID, time.Now().UTC())
+			if err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					DestroyCurrentSession(c)
+					c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
+					return
+				}
+				log.Printf("Failed to delete user %d: %v", sessionUser.UserID, err)
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete user"})
+				return
+			}
+
+			state.DeleteSessionsForUser(sessionUser.UserID)
+			DestroyCurrentSession(c)
+			if err := PurgeTokensForUser(fmt.Sprintf("%d", sessionUser.UserID)); err != nil {
+				log.Printf("Failed to purge oauth tokens for deleted user %d: %v", sessionUser.UserID, err)
+			}
+
+			c.JSON(http.StatusOK, gin.H{
+				"deleted":         true,
+				"user_id":         result.UserID,
+				"queued_home_ids": result.HomeIDs,
 			})
 		})
 		protected.POST("/logout", func(c *gin.Context) {

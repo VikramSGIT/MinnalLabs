@@ -6,12 +6,14 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"strconv"
 	"time"
 )
 
 type SessionInfo struct {
 	UserID     uint      `json:"user_id"`
 	Username   string    `json:"username"`
+	IsAdmin    bool      `json:"is_admin"`
 	CreatedAt  time.Time `json:"created_at"`
 	LastSeenAt time.Time `json:"last_seen_at"`
 }
@@ -21,24 +23,36 @@ func sessionKey(token string) string {
 	return "session:" + hex.EncodeToString(sum[:])
 }
 
-func CreateSession(userID uint, username string) (string, SessionInfo, error) {
+func userSessionsKey(userID uint) string {
+	return "user_sessions:" + strconv.FormatUint(uint64(userID), 10)
+}
+
+func CreateSession(userID uint, username string, isAdmin ...bool) (string, SessionInfo, error) {
 	tokenBytes := make([]byte, 32)
 	if _, err := rand.Read(tokenBytes); err != nil {
 		return "", SessionInfo{}, err
+	}
+
+	admin := false
+	if len(isAdmin) > 0 {
+		admin = isAdmin[0]
 	}
 
 	now := time.Now().UTC()
 	info := SessionInfo{
 		UserID:     userID,
 		Username:   username,
+		IsAdmin:    admin,
 		CreatedAt:  now,
 		LastSeenAt: now,
 	}
 
 	token := base64.RawURLEncoding.EncodeToString(tokenBytes)
-	if err := cacheJSONTTL(sessionKey(token), info, sessionTTL); err != nil {
+	key := sessionKey(token)
+	if err := cacheJSONTTL(key, info, sessionTTL); err != nil {
 		return "", SessionInfo{}, err
 	}
+	_ = rdb.SAdd(ctx, userSessionsKey(userID), key).Err()
 
 	return token, info, nil
 }
@@ -71,7 +85,24 @@ func DeleteSession(token string) {
 		return
 	}
 
-	rdb.Del(ctx, sessionKey(token))
+	key := sessionKey(token)
+	if info, ok := GetSession(token); ok {
+		_ = rdb.SRem(ctx, userSessionsKey(info.UserID), key).Err()
+	}
+	rdb.Del(ctx, key)
+}
+
+func DeleteSessionsForUser(userID uint) {
+	if userID == 0 {
+		return
+	}
+
+	setKey := userSessionsKey(userID)
+	keys, err := rdb.SMembers(ctx, setKey).Result()
+	if err == nil && len(keys) > 0 {
+		_ = rdb.Del(ctx, keys...).Err()
+	}
+	_ = rdb.Del(ctx, setKey).Err()
 }
 
 func cacheJSONTTL(key string, v interface{}, ttl time.Duration) error {

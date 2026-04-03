@@ -33,10 +33,11 @@ type CapInfo struct {
 
 // DeviceInfo holds cached device metadata.
 type DeviceInfo struct {
-	ID        uint `json:"id"`
-	UserID    uint `json:"user_id"`
-	HomeID    uint `json:"home_id"`
-	ProductID uint `json:"product_id"`
+	ID        uint   `json:"id"`
+	UserID    uint   `json:"user_id"`
+	HomeID    uint   `json:"home_id"`
+	ProductID uint   `json:"product_id"`
+	Name      string `json:"name,omitempty"`
 }
 
 type DevicePresence struct {
@@ -53,6 +54,7 @@ func deviceStateKey(deviceID uint) string    { return fmt.Sprintf("device:%d", d
 func deviceMetaKey(deviceID uint) string     { return fmt.Sprintf("device_meta:%d", deviceID) }
 func devicePresenceKey(deviceID uint) string { return fmt.Sprintf("device_presence:%d", deviceID) }
 func productCapsKey(productID uint) string   { return fmt.Sprintf("product_caps:%d", productID) }
+func userDeviceIDsKey(userID uint) string    { return fmt.Sprintf("user_device_ids:%d", userID) }
 
 const deviceIDsSet = "device_ids"
 
@@ -130,7 +132,7 @@ func SyncProductCaps() {
 // or Valkey data loss.
 func SyncDevices() {
 	var devices []models.Device
-	if err := gdb.Select("id, user_id, home_id, product_id").
+	if err := gdb.Select("id, user_id, home_id, product_id, name").
 		Where("deleted_at IS NULL").
 		Find(&devices).Error; err != nil {
 		log.Printf("Failed to sync devices from database: %v", err)
@@ -143,6 +145,7 @@ func SyncDevices() {
 			UserID:    d.UserID,
 			HomeID:    d.HomeID,
 			ProductID: d.ProductID,
+			Name:      d.Name,
 		})
 	}
 
@@ -198,7 +201,12 @@ func GetProductCapByKey(productID uint, esphomeKey string) (CapInfo, bool) {
 // CacheDevice writes device metadata to Valkey. Called on enrollment.
 func CacheDevice(d DeviceInfo) {
 	cacheJSON(deviceMetaKey(d.ID), d)
-	rdb.SAdd(ctx, deviceIDsSet, d.ID)
+	pipe := rdb.TxPipeline()
+	pipe.SAdd(ctx, deviceIDsSet, d.ID)
+	pipe.SAdd(ctx, userDeviceIDsKey(d.UserID), d.ID)
+	if _, err := pipe.Exec(ctx); err != nil {
+		log.Printf("Error caching device set membership for device %d: %v", d.ID, err)
+	}
 }
 
 func GetDevice(id uint) (DeviceInfo, bool) {
@@ -211,30 +219,32 @@ func GetAllDevices() []DeviceInfo {
 	if err != nil {
 		return nil
 	}
-	devices := make([]DeviceInfo, 0, len(ids))
-	for _, idStr := range ids {
-		id, err := strconv.ParseUint(idStr, 10, 64)
-		if err != nil {
-			continue
-		}
-		if di, ok := GetDevice(uint(id)); ok {
-			devices = append(devices, di)
-		}
+	return getDevicesByIDStrings(ids)
+}
+
+func GetDevicesForUser(userID uint) []DeviceInfo {
+	ids, err := rdb.SMembers(ctx, userDeviceIDsKey(userID)).Result()
+	if err != nil {
+		return nil
 	}
-	return devices
+	return getDevicesByIDStrings(ids)
 }
 
 func RemoveDevice(deviceID uint) {
-	if err := rdb.Del(ctx,
+	device, found := GetDevice(deviceID)
+
+	pipe := rdb.TxPipeline()
+	pipe.Del(ctx,
 		deviceMetaKey(deviceID),
 		devicePresenceKey(deviceID),
 		deviceStateKey(deviceID),
-	).Err(); err != nil {
-		log.Printf("Error removing cache entries for device %d: %v", deviceID, err)
+	)
+	pipe.SRem(ctx, deviceIDsSet, deviceID)
+	if found && device.UserID != 0 {
+		pipe.SRem(ctx, userDeviceIDsKey(device.UserID), deviceID)
 	}
-
-	if err := rdb.SRem(ctx, deviceIDsSet, deviceID).Err(); err != nil {
-		log.Printf("Error removing device %d from tracked device set: %v", deviceID, err)
+	if _, err := pipe.Exec(ctx); err != nil {
+		log.Printf("Error removing cache entries for device %d: %v", deviceID, err)
 	}
 }
 
@@ -345,4 +355,41 @@ func getJSON(key string, dest interface{}) bool {
 		return false
 	}
 	return json.Unmarshal([]byte(val), dest) == nil
+}
+
+func getDevicesByIDStrings(idStrings []string) []DeviceInfo {
+	if len(idStrings) == 0 {
+		return nil
+	}
+
+	keys := make([]string, 0, len(idStrings))
+	for _, idStr := range idStrings {
+		id, err := strconv.ParseUint(idStr, 10, 64)
+		if err != nil {
+			continue
+		}
+		keys = append(keys, deviceMetaKey(uint(id)))
+	}
+	if len(keys) == 0 {
+		return nil
+	}
+
+	values, err := rdb.MGet(ctx, keys...).Result()
+	if err != nil {
+		return nil
+	}
+
+	devices := make([]DeviceInfo, 0, len(values))
+	for _, raw := range values {
+		val, ok := raw.(string)
+		if !ok || val == "" {
+			continue
+		}
+
+		var di DeviceInfo
+		if json.Unmarshal([]byte(val), &di) == nil {
+			devices = append(devices, di)
+		}
+	}
+	return devices
 }

@@ -31,6 +31,9 @@ func main() {
 
 	db.InitDB(cfg)
 	db.RunMigrations()
+	if strings.EqualFold(strings.TrimSpace(cfg.Server.Profile), "stress") {
+		db.RunSQLFile("docker/stress/postgres/002_stress_catalog.sql")
+	}
 
 	state.InitState(cfg, db.DB)
 	state.SyncProductCaps()

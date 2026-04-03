@@ -47,7 +47,7 @@ func issueSession(c *gin.Context, user *localmodels.User) error {
 		state.DeleteSession(existingToken)
 	}
 
-	token, _, err := state.CreateSession(user.ID, user.Username)
+	token, _, err := state.CreateSession(user.ID, user.Username, IsAdminUser(user.ID))
 	if err != nil {
 		return err
 	}
@@ -61,6 +61,10 @@ func destroySession(c *gin.Context) {
 		state.DeleteSession(token)
 	}
 	http.SetCookie(c.Writer, expiredSessionCookie())
+}
+
+func DestroyCurrentSession(c *gin.Context) {
+	destroySession(c)
 }
 
 func restoreSessionFromRequest(r *http.Request) (SessionUser, bool) {
@@ -78,7 +82,7 @@ func restoreSessionFromRequest(r *http.Request) (SessionUser, bool) {
 		Token:    token,
 		UserID:   info.UserID,
 		Username: info.Username,
-		IsAdmin:  IsAdminUser(info.UserID),
+		IsAdmin:  info.IsAdmin,
 	}, true
 }
 

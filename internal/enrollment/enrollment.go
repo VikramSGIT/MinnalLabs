@@ -14,6 +14,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/iot-backend/internal/config"
 	devcrypto "github.com/iot-backend/internal/crypto"
+	"github.com/iot-backend/internal/deletion"
 	"github.com/iot-backend/internal/db"
 	"github.com/iot-backend/internal/homejobs"
 	"github.com/iot-backend/internal/models"
@@ -398,42 +399,8 @@ func deleteHome(c *gin.Context) {
 		return
 	}
 
-	var devices []models.Device
-	if err := db.DB.Where("home_id = ?", homeID).Find(&devices).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load home devices"})
-		return
-	}
-
-	deviceIDs := make([]uint, 0, len(devices))
-	for _, device := range devices {
-		deviceIDs = append(deviceIDs, device.ID)
-	}
-
 	if err := db.DB.Transaction(func(tx *gorm.DB) error {
-		now := time.Now().UTC()
-		if len(deviceIDs) > 0 {
-			if err := tx.Where("id IN ?", deviceIDs).Delete(&models.Device{}).Error; err != nil {
-				return fmt.Errorf("soft delete home devices: %w", err)
-			}
-		}
-
-		if err := tx.Model(&home).Updates(map[string]interface{}{
-			"mqtt_provision_state": models.HomeMQTTProvisionStateDeleting,
-			"mqtt_provision_error": "",
-			"updated_at":           now,
-		}).Error; err != nil {
-			return fmt.Errorf("mark home deleting: %w", err)
-		}
-
-		if err := tx.Delete(&home).Error; err != nil {
-			return fmt.Errorf("soft delete home: %w", err)
-		}
-
-		if err := homejobs.ReplaceWithCleanupJob(tx, home.ID); err != nil {
-			return fmt.Errorf("enqueue home cleanup: %w", err)
-		}
-
-		return nil
+		return deletion.ScheduleHomeDeletion(tx, home.ID, time.Now().UTC())
 	}); err != nil {
 		log.Printf("Failed to delete home %d: %v", homeID, err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete home"})
@@ -443,7 +410,7 @@ func deleteHome(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"deleted":              true,
 		"home_id":              home.ID,
-		"device_ids":           deviceIDs,
+		"queued_cleanup":       true,
 		"mqtt_provision_state": models.HomeMQTTProvisionStateDeleting,
 	})
 }
@@ -472,7 +439,7 @@ func deleteDevice(c *gin.Context) {
 		return
 	}
 
-	if err := db.DB.Unscoped().Delete(&device).Error; err != nil {
+	if err := db.DB.Delete(&device).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete device"})
 		return
 	}
@@ -670,7 +637,7 @@ func enrollDevice(c *gin.Context) {
 
 	state.CacheDevice(state.DeviceInfo{
 		ID: device.ID, UserID: device.UserID, HomeID: device.HomeID,
-		ProductID: device.ProductID,
+		ProductID: device.ProductID, Name: device.Name,
 	})
 
 	mqtt.SubscribeDevice(device)

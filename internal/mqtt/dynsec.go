@@ -2,7 +2,6 @@ package mqtt
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -20,7 +19,7 @@ const (
 
 var (
 	dynsecMu     sync.Mutex
-	dynsecRespCh = make(chan dynsecEnvelope, 8)
+	dynsecRespCh = make(chan dynsecEnvelope, 64)
 )
 
 type dynsecEnvelope struct {
@@ -65,22 +64,30 @@ func clearDynsecResponses() {
 }
 
 func sendDynsecCommand(command map[string]interface{}) error {
+	return sendDynsecCommands([]map[string]interface{}{command})
+}
+
+func sendDynsecCommands(commands []map[string]interface{}) error {
+	if len(commands) == 0 {
+		return nil
+	}
+
 	dynsecMu.Lock()
 	defer dynsecMu.Unlock()
 
 	clearDynsecResponses()
 
 	payload, err := json.Marshal(map[string]interface{}{
-		"commands": []map[string]interface{}{command},
+		"commands": commands,
 	})
 	if err != nil {
-		return fmt.Errorf("marshal dynsec command: %w", err)
+		return fmt.Errorf("marshal dynsec commands: %w", err)
 	}
 
 	token := Client.Publish(dynsecControlTopic, 1, false, payload)
 	token.Wait()
 	if err := token.Error(); err != nil {
-		return fmt.Errorf("publish dynsec command: %w", err)
+		return fmt.Errorf("publish dynsec commands: %w", err)
 	}
 
 	select {
@@ -119,70 +126,62 @@ func homeTopicPattern(userID, homeID uint) string {
 	return fmt.Sprintf("%d/%d/#", userID, homeID)
 }
 
-func ProvisionHomeAccess(userID, homeID uint, username, password string) (err error) {
+func ProvisionHomeAccess(userID, homeID uint, username, password string) error {
 	roleName := homeRoleName(userID, homeID)
 	topicPattern := homeTopicPattern(userID, homeID)
-	roleCreated := false
-	clientCreated := false
 
-	defer func() {
-		if err == nil {
-			return
-		}
-		if clientCreated {
-			if cleanupErr := sendDynsecCommand(map[string]interface{}{
-				"command":  "deleteClient",
-				"username": username,
-			}); cleanupErr != nil {
-				log.Printf("Dynamic Security cleanup failed for client %s: %v", username, cleanupErr)
-			}
-		}
-		if roleCreated {
-			if cleanupErr := sendDynsecCommand(map[string]interface{}{
-				"command":  "deleteRole",
-				"rolename": roleName,
-			}); cleanupErr != nil {
-				log.Printf("Dynamic Security cleanup failed for role %s: %v", roleName, cleanupErr)
-			}
-		}
-	}()
-
-	if err = sendDynsecCommand(map[string]interface{}{
-		"command":  "createRole",
-		"rolename": roleName,
-	}); err != nil {
-		return err
-	}
-	roleCreated = true
-
-	for _, aclType := range []string{"publishClientSend", "publishClientReceive", "subscribePattern"} {
-		if err = sendDynsecCommand(map[string]interface{}{
+	commands := []map[string]interface{}{
+		{
+			"command":  "createRole",
+			"rolename": roleName,
+		},
+		{
 			"command":  "addRoleACL",
 			"rolename": roleName,
-			"acltype":  aclType,
+			"acltype":  "publishClientSend",
 			"topic":    topicPattern,
 			"allow":    true,
 			"priority": -1,
-		}); err != nil {
-			return err
-		}
+		},
+		{
+			"command":  "addRoleACL",
+			"rolename": roleName,
+			"acltype":  "publishClientReceive",
+			"topic":    topicPattern,
+			"allow":    true,
+			"priority": -1,
+		},
+		{
+			"command":  "addRoleACL",
+			"rolename": roleName,
+			"acltype":  "subscribePattern",
+			"topic":    topicPattern,
+			"allow":    true,
+			"priority": -1,
+		},
+		{
+			"command":  "createClient",
+			"username": username,
+			"password": password,
+		},
+		{
+			"command":  "addClientRole",
+			"username": username,
+			"rolename": roleName,
+			"priority": -1,
+		},
 	}
 
-	if err = sendDynsecCommand(map[string]interface{}{
-		"command":  "createClient",
-		"username": username,
-		"password": password,
-	}); err != nil {
-		return err
-	}
-	clientCreated = true
-
-	if err = sendDynsecCommand(map[string]interface{}{
-		"command":  "addClientRole",
-		"username": username,
-		"rolename": roleName,
-		"priority": -1,
-	}); err != nil {
+	if err := sendDynsecCommands(commands); err != nil {
+		// Attempt cleanup on failure
+		_ = sendDynsecCommand(map[string]interface{}{
+			"command":  "deleteClient",
+			"username": username,
+		})
+		_ = sendDynsecCommand(map[string]interface{}{
+			"command":  "deleteRole",
+			"rolename": roleName,
+		})
 		return err
 	}
 
@@ -191,26 +190,22 @@ func ProvisionHomeAccess(userID, homeID uint, username, password string) (err er
 
 func CleanupHomeAccess(userID, homeID uint, username string) error {
 	roleName := homeRoleName(userID, homeID)
-	var errs []string
 
+	commands := make([]map[string]interface{}, 0, 2)
 	if strings.TrimSpace(username) != "" {
-		if err := sendDynsecCommand(map[string]interface{}{
+		commands = append(commands, map[string]interface{}{
 			"command":  "deleteClient",
 			"username": username,
-		}); err != nil && !ignoreMissingDynsecError(err) {
-			errs = append(errs, err.Error())
-		}
+		})
 	}
-
-	if err := sendDynsecCommand(map[string]interface{}{
+	commands = append(commands, map[string]interface{}{
 		"command":  "deleteRole",
 		"rolename": roleName,
-	}); err != nil && !ignoreMissingDynsecError(err) {
-		errs = append(errs, err.Error())
-	}
+	})
 
-	if len(errs) > 0 {
-		return errors.New(strings.Join(errs, "; "))
+	err := sendDynsecCommands(commands)
+	if err != nil && !ignoreMissingDynsecError(err) {
+		return err
 	}
 
 	return nil
