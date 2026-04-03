@@ -42,6 +42,13 @@ func initSessionConfig(cfg *config.Config) {
 	appCfg = cfg
 }
 
+// IssueSessionForUser creates a new session for the given user and sets the
+// session cookie on the response. It is the exported counterpart of issueSession
+// so that other packages (e.g. googleauth) can issue sessions without duplicating logic.
+func IssueSessionForUser(c *gin.Context, user *localmodels.User) error {
+	return issueSession(c, user)
+}
+
 func issueSession(c *gin.Context, user *localmodels.User) error {
 	if existingToken := sessionTokenFromRequest(c.Request); existingToken != "" {
 		state.DeleteSession(existingToken)

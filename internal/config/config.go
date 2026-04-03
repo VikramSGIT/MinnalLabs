@@ -55,6 +55,11 @@ type Config struct {
 	Firmware struct {
 		StorageDir string
 	}
+	GoogleAuth struct {
+		ClientID     string
+		ClientSecret string
+		RedirectURI  string
+	}
 	Pprof struct {
 		Enabled bool
 		Addr    string
@@ -101,6 +106,9 @@ func LoadConfig() *Config {
 	viper.SetDefault("oauth.client_id", "google-client")
 	viper.SetDefault("oauth.client_secret", "")
 	viper.SetDefault("firmware.storage_dir", "./firmware")
+	viper.SetDefault("googleauth.client_id", "")
+	viper.SetDefault("googleauth.client_secret", "")
+	viper.SetDefault("googleauth.redirect_uri", "")
 	viper.SetDefault("pprof.enabled", false)
 	viper.SetDefault("pprof.addr", "127.0.0.1:6060")
 

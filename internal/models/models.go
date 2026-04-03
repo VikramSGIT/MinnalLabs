@@ -15,6 +15,7 @@ type User struct {
 	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
 	Username  string         `gorm:"uniqueIndex" json:"username"`
 	Password  string         `json:"-"`
+	GoogleSub string         `gorm:"column:google_sub" json:"-"`
 	Homes     []Home         `json:"homes,omitempty"`
 }
 

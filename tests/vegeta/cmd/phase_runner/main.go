@@ -224,6 +224,8 @@ func (r *Runner) run() error {
 		return r.runCreateUsers()
 	case "google_oauth_enroll":
 		return r.runGoogleOAuthEnroll()
+	case "google_signin_enroll":
+		return r.runGoogleSignInEnroll()
 	case "create_homes":
 		return r.runCreateHomes()
 	case "enroll_devices":
@@ -305,6 +307,43 @@ func (r *Runner) runGoogleOAuthEnroll() error {
 		if ok {
 			r.metrics.RecordCounter("phase_google_oauth_enrolled", 1, r.scenario)
 		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	return r.evaluateThresholds()
+}
+
+func (r *Runner) runGoogleSignInEnroll() error {
+	err := r.runScheduled(func(ctx context.Context, index int) error {
+		googleSub := fmt.Sprintf("google-sub-%s-%d", r.cfg.RunID, index)
+		email := fmt.Sprintf("stress_%s_%d@example.com", r.cfg.RunID, index)
+
+		parsed, sessionToken, ok := r.testGoogleLogin(ctx, googleSub, email)
+		if !ok {
+			return nil
+		}
+		r.metrics.RecordCounter("phase_google_signin_created", 1, r.scenario)
+
+		userIDCheck := parsed.UserID > 0
+		r.metrics.RecordCheck(r.scenario, "Google sign-in returned a user id", userIDCheck)
+		if !userIDCheck {
+			return nil
+		}
+
+		// Authorize + exchange OAuth token so the user can do fulfillment
+		code, ok := r.authorizeCode(ctx, sessionToken, fmt.Sprintf("%d-google-signin-enroll", index))
+		if !ok {
+			return nil
+		}
+		token, ok := r.exchangeOAuthToken(ctx, code)
+		if !ok {
+			return nil
+		}
+
+		r.state.UpsertUser(index, parsed.UserID, parsed.Username, "", sessionToken, token.AccessToken, token.RefreshToken)
+		r.metrics.RecordCounter("phase_google_signin_enrolled", 1, r.scenario)
 		return nil
 	})
 	if err != nil {

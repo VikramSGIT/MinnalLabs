@@ -18,6 +18,7 @@ import (
 	"github.com/iot-backend/internal/db"
 	"github.com/iot-backend/internal/enrollment"
 	"github.com/iot-backend/internal/google"
+	"github.com/iot-backend/internal/googleauth"
 	"github.com/iot-backend/internal/homejobs"
 	"github.com/iot-backend/internal/middleware"
 	"github.com/iot-backend/internal/mqtt"
@@ -63,6 +64,13 @@ func main() {
 	google.SetupGoogleRoutes(r)
 	enrollment.SetupEnrollmentRoutes(r, cfg)
 	admin.SetupAdminRoutes(r, cfg)
+
+	if cfg.GoogleAuth.ClientID != "" {
+		googleauth.SetupGoogleAuthRoutes(r, cfg)
+	}
+	if strings.EqualFold(strings.TrimSpace(cfg.Server.Profile), "stress") {
+		googleauth.SetupTestGoogleLoginRoute(r, cfg)
+	}
 
 	serverAddr := cfg.Server.Host + ":" + cfg.Server.Port
 	srv := &http.Server{

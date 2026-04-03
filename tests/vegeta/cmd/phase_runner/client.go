@@ -390,6 +390,35 @@ func (r *Runner) googleFulfillment(ctx context.Context, accessToken, intent stri
 	return parsed, true
 }
 
+type testGoogleLoginResponse struct {
+	UserID   int    `json:"user_id"`
+	Username string `json:"username"`
+}
+
+func (r *Runner) testGoogleLogin(ctx context.Context, googleSub, email string) (testGoogleLoginResponse, string, bool) {
+	payload := map[string]string{
+		"google_sub": googleSub,
+		"email":      email,
+	}
+	body, _ := json.Marshal(payload)
+	result := r.doRequest(ctx, http.MethodPost, "/api/test/google-login", "POST /api/test/google-login", []int{200}, jsonHeaders(nil), body, false)
+	r.metrics.RecordTrend("api_test_google_login_duration", result.DurationMs, r.scenario)
+	if !result.Expected {
+		return testGoogleLoginResponse{}, "", false
+	}
+	var parsed testGoogleLoginResponse
+	if !r.parseJSON(result, &parsed) {
+		return testGoogleLoginResponse{}, "", false
+	}
+	token := sessionTokenFromHeaders(result.Header, r.cfg.SessionCookieName)
+	if token == "" {
+		r.metrics.RecordCheck(r.scenario, "POST /api/test/google-login returned a session cookie", false)
+		return parsed, "", false
+	}
+	r.metrics.RecordCheck(r.scenario, "POST /api/test/google-login returned a session cookie", true)
+	return parsed, token, true
+}
+
 func (r *Runner) ensureSessionForSlot(ctx context.Context, slot int) (SessionContext, bool) {
 	user, ok := r.state.User(slot)
 	if !ok {

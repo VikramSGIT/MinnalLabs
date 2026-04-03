@@ -24,3 +24,5 @@ firmware/*
 !firmware/.gitkeep
 
 results/
+
+phase_runner

@@ -109,6 +109,7 @@ OPERATION_COUNTERS = {
     "phase_users_deleted_self", "phase_users_deleted_admin",
     "phase_google_oauth_authorized", "phase_google_oauth_token_exchanged",
     "phase_google_oauth_enrolled",
+    "phase_google_signin_created", "phase_google_signin_enrolled",
 }
 ASYNC_TREND_METRICS = {"async_home_ready_duration", "async_home_ready_polls"}
 ASYNC_COUNTER_METRICS = {
@@ -128,6 +129,8 @@ COUNTER_DISPLAY = {
     "phase_google_oauth_authorized": "Google OAuth authorized",
     "phase_google_oauth_token_exchanged": "Google OAuth tokens exchanged",
     "phase_google_oauth_enrolled": "Google OAuth enrolled",
+    "phase_google_signin_created": "Google Sign-In users created",
+    "phase_google_signin_enrolled": "Google Sign-In enrolled",
 }
 
 
