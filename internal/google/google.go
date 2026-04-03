@@ -258,10 +258,12 @@ func handleExecute(payload json.RawMessage, userID uint) (interface{}, error) {
 				mqtt.Publish(topic, mqttPayload)
 				log.Printf("Google Execute: %s cap %s = %s", compoundID, capKey, mqttPayload)
 
+				stateMap := buildTraitState(capInfo.TraitType, mqttPayload)
+				stateMap["online"] = true
 				commandsResult = append(commandsResult, map[string]interface{}{
 					"ids":    []string{compoundID},
 					"status": "SUCCESS",
-					"states": map[string]interface{}{"online": true},
+					"states": stateMap,
 				})
 			}
 		}

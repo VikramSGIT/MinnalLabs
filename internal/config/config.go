@@ -25,12 +25,15 @@ type Config struct {
 		Name     string
 	}
 	MQTT struct {
-		Broker   string
-		Host     string
-		Port     string
-		ClientID string
-		Username string
-		Password string
+		Broker          string
+		Host            string
+		Port            string
+		ClientID        string
+		Username        string
+		Password        string
+		PublishTimeout  time.Duration
+		PublishRetries  int
+		PublishRetryDelay time.Duration
 	}
 	Frontend struct {
 		AllowedOrigins string
@@ -85,6 +88,9 @@ func LoadConfig() *Config {
 	viper.SetDefault("mqtt.clientid", "iot-backend")
 	viper.SetDefault("mqtt.username", "")
 	viper.SetDefault("mqtt.password", "")
+	viper.SetDefault("mqtt.publish_timeout", "5s")
+	viper.SetDefault("mqtt.publish_retries", 3)
+	viper.SetDefault("mqtt.publish_retry_delay", "500ms")
 	viper.SetDefault("frontend.allowed_origins", "http://localhost,http://localhost:8080,http://127.0.0.1,http://127.0.0.1:8080,https://localhost,https://127.0.0.1")
 	viper.SetDefault("session.cookie_name", "user_session")
 	viper.SetDefault("session.domain", "")

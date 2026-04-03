@@ -5,11 +5,18 @@ import (
 	"strconv"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	pahomqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/iot-backend/internal/config"
 	"github.com/iot-backend/internal/models"
 	"github.com/iot-backend/internal/state"
+)
+
+var (
+	publishTimeout    = 5 * time.Second
+	publishMaxRetries = 3
+	publishRetryDelay = 500 * time.Millisecond
 )
 
 var Client pahomqtt.Client
@@ -28,6 +35,16 @@ func loadStatusUpdateHook() func(deviceID uint, status string) {
 }
 
 func InitMQTT(cfg *config.Config) {
+	if cfg.MQTT.PublishTimeout > 0 {
+		publishTimeout = cfg.MQTT.PublishTimeout
+	}
+	if cfg.MQTT.PublishRetries > 0 {
+		publishMaxRetries = cfg.MQTT.PublishRetries
+	}
+	if cfg.MQTT.PublishRetryDelay > 0 {
+		publishRetryDelay = cfg.MQTT.PublishRetryDelay
+	}
+
 	opts := pahomqtt.NewClientOptions()
 	opts.AddBroker(cfg.MQTT.Broker)
 	opts.SetClientID(cfg.MQTT.ClientID)
@@ -123,8 +140,24 @@ func Unsubscribe(topic string) {
 
 func Publish(topic string, payload interface{}) {
 	token := Client.Publish(topic, 1, false, payload)
-	token.Wait()
-	log.Printf("Published to topic: %s", topic)
+	go func() {
+		for attempt := 1; attempt <= publishMaxRetries; attempt++ {
+			if token.WaitTimeout(publishTimeout) {
+				if err := token.Error(); err != nil {
+					log.Printf("MQTT publish error on topic %s (attempt %d/%d): %v", topic, attempt, publishMaxRetries, err)
+				} else {
+					return
+				}
+			} else {
+				log.Printf("MQTT publish timeout on topic %s (attempt %d/%d)", topic, attempt, publishMaxRetries)
+			}
+			if attempt < publishMaxRetries {
+				time.Sleep(publishRetryDelay)
+				token = Client.Publish(topic, 1, false, payload)
+			}
+		}
+		log.Printf("MQTT publish failed permanently on topic %s after %d attempts", topic, publishMaxRetries)
+	}()
 }
 
 // SubscribeDevice subscribes to all capability state topics for a single device.

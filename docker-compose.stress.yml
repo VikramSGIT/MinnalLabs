@@ -80,6 +80,9 @@ services:
       MQTT_PORT: 1883
       MQTT_USERNAME: admin
       MQTT_PASSWORD: admin-password
+      MQTT_PUBLISH_TIMEOUT: 5s
+      MQTT_PUBLISH_RETRIES: "3"
+      MQTT_PUBLISH_RETRY_DELAY: 500ms
       FRONTEND_ALLOWED_ORIGINS: http://localhost
       SESSION_SECURE: "false"
       OAUTH_CLIENT_ID: google-client
