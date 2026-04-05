@@ -54,7 +54,7 @@ class AdminFirmwareManager extends HTMLElement {
             .map(
               (rollout) => `
                 <div class="meta">
-                  <strong>Rollout #${escapeHtml(rollout.id)}</strong>
+                  <strong>Update Rollout</strong>
                   <div>Status: ${escapeHtml(rollout.status)}</div>
                   <div>Target: ${escapeHtml(rollout.target_version)}</div>
                   <div>Batch Size: ${escapeHtml(`${rollout.batch_percentage}%`)}</div>
@@ -154,7 +154,7 @@ class AdminFirmwareManager extends HTMLElement {
       <section class="panel">
         <div>
           <h2>Firmware Admin</h2>
-          <p class="hint">Upload firmware binaries, then create a staged retained per-device rollout using the saved product batch percentage and interval settings shown below.</p>
+          <p class="hint">Upload firmware files, then schedule an update rollout for devices using the settings below.</p>
         </div>
         <div class="grid">
           <div class="meta">
@@ -200,24 +200,24 @@ class AdminFirmwareManager extends HTMLElement {
               <input id="firmwareFile" type="file" accept=".bin" required>
             </label>
           </div>
-          <p class="hint">Upload the ESPHome OTA binary (<code>*.ota.bin</code>). Factory binaries (<code>*.factory.bin</code>) are rejected because HTTP OTA cannot install them.</p>
+          <p class="hint">Upload the OTA firmware file (<code>*.ota.bin</code>). Factory files are not supported.</p>
           <div class="button-row">
             <button id="uploadBtn" type="submit" ${this.isLoading ? "disabled" : ""}>${this.isUploading ? "Uploading..." : "Upload Firmware"}</button>
           </div>
         </form>
         <section class="section">
-          <h3>Create Staged Rollout</h3>
+          <h3>Schedule Update Rollout</h3>
           <div class="grid">
             <label>
-              Batch Percentage
+              Devices Per Batch (%)
               <input id="batchPercentage" type="number" min="1" max="100" step="1" value="${escapeHtml(String(rolloutDefaults.percentage))}" required>
             </label>
             <label>
-              Interval Value
+              Time Between Batches
               <input id="batchIntervalValue" type="number" min="1" step="1" value="${escapeHtml(String(rolloutDefaults.intervalValue))}" required>
             </label>
             <label>
-              Interval Unit
+              Time Unit
               <select id="batchIntervalUnit">
                 <option value="hours" ${rolloutDefaults.intervalUnit === "hours" ? "selected" : ""}>Hours</option>
                 <option value="days" ${rolloutDefaults.intervalUnit === "days" ? "selected" : ""}>Days</option>
@@ -318,7 +318,7 @@ class AdminFirmwareManager extends HTMLElement {
       return;
     }
     if (String(file.name || "").toLowerCase().endsWith(".factory.bin")) {
-      this.errorMessage = "Upload the ESPHome OTA binary (*.ota.bin), not the factory binary (*.factory.bin).";
+      this.errorMessage = "Please upload an OTA firmware file (*.ota.bin). Factory files are not supported.";
       this.successMessage = "";
       this.render();
       return;
@@ -378,7 +378,7 @@ class AdminFirmwareManager extends HTMLElement {
         rolloutPayload,
         this.apiBaseUrl,
       );
-      this.successMessage = `Created rollout #${response.rollout_id} for ${response.eligible_devices} eligible device(s) across ${response.total_batches} batch(es).`;
+      this.successMessage = `Update scheduled for ${response.eligible_devices} device(s) in ${response.total_batches} batch(es).`;
       await this.loadProducts();
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) {

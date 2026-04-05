@@ -106,15 +106,15 @@ function buildPublicKeyChunkRequest(transferId, chunkIndex) {
 
 function buildProvisioningChunks(bundleBytes) {
   if (!(bundleBytes instanceof Uint8Array) || bundleBytes.length === 0) {
-    throw new Error("Encrypted provisioning bundle is empty.");
+    throw new Error("Provisioning data is empty.");
   }
   if (bundleBytes.length > 0xffff) {
-    throw new Error("Encrypted provisioning bundle is too large for BLE transport.");
+    throw new Error("Provisioning data is too large to transfer.");
   }
 
   const totalChunks = Math.ceil(bundleBytes.length / CHUNK_PAYLOAD_SIZE);
   if (totalChunks > 0xffff) {
-    throw new Error("Encrypted provisioning bundle requires too many BLE chunks.");
+    throw new Error("Provisioning data requires too many transfers.");
   }
 
   const transferId = window.crypto?.getRandomValues
@@ -158,15 +158,15 @@ async function readChunkedDevicePublicKey(mainService) {
       mainService.getCharacteristic(UUIDS.devicePublicKeyRequest),
     ]);
   } catch (_) {
-    throw new Error("Device firmware does not support chunked secure enrollment (missing public key transfer characteristic). Update the firmware first.");
+    throw new Error("This device does not support secure enrollment. Please update the device firmware first.");
   }
 
   const firstChunk = parseChunkPacket(await chunkCharacteristic.readValue(), "Device public key");
   if (firstChunk.chunkIndex !== 0) {
-    throw new Error("Device public key transfer did not start at chunk 0.");
+    throw new Error("Device data transfer error. Please reconnect and try again.");
   }
   if (firstChunk.totalBytes !== DEVICE_PUBLIC_KEY_BYTES) {
-    throw new Error(`Device public key must be ${DEVICE_PUBLIC_KEY_BYTES} bytes, got ${firstChunk.totalBytes}.`);
+    throw new Error("Invalid device data received. Please reconnect and try again.");
   }
 
   const assembled = new Uint8Array(firstChunk.totalBytes);
@@ -180,13 +180,13 @@ async function readChunkedDevicePublicKey(mainService) {
     const packet = parseChunkPacket(await chunkCharacteristic.readValue(), "Device public key");
 
     if (packet.transferId !== firstChunk.transferId) {
-      throw new Error("Device public key transfer ID changed mid-transfer.");
+      throw new Error("Connection interrupted during data transfer. Please reconnect and try again.");
     }
     if (packet.chunkIndex !== chunkIndex) {
-      throw new Error(`Expected device public key chunk ${chunkIndex}, got ${packet.chunkIndex}.`);
+      throw new Error("Data transfer error. Please reconnect and try again.");
     }
     if (packet.totalChunks !== firstChunk.totalChunks || packet.totalBytes !== firstChunk.totalBytes) {
-      throw new Error("Device public key transfer metadata changed mid-transfer.");
+      throw new Error("Connection interrupted during data transfer. Please reconnect and try again.");
     }
 
     assembled.set(packet.payload, offset);
@@ -194,7 +194,7 @@ async function readChunkedDevicePublicKey(mainService) {
   }
 
   if (offset !== firstChunk.totalBytes) {
-    throw new Error(`Device public key transfer incomplete: expected ${firstChunk.totalBytes} bytes, got ${offset}.`);
+    throw new Error("Incomplete data transfer from device. Please reconnect and try again.");
   }
 
   return { bytes: assembled, totalChunks: firstChunk.totalChunks };
@@ -214,7 +214,7 @@ function formatReconnectStatus(status) {
   }
 
   if (status.mqtt_status === "unknown") {
-    return "Waiting for first MQTT status";
+    return "Waiting for device to connect";
   }
 
   return "Waiting for reconnect";
@@ -474,7 +474,7 @@ class DeviceEnrollment extends HTMLElement {
       <section class="panel">
         <div>
           <h2>Enroll Device</h2>
-          <p>Read the device identity and public key over Bluetooth, create the backend device record, then write an encrypted provisioning bundle to the device over secure BLE chunks.</p>
+          <p>Connect to your device via Bluetooth and set it up for your home.</p>
         </div>
 
         <div class="meta">
@@ -494,7 +494,7 @@ class DeviceEnrollment extends HTMLElement {
           <div class="button-row">
             <button id="connectBtn" class="primary" type="button">Connect Device</button>
             <button id="disconnectBtn" class="danger" type="button" disabled>Disconnect</button>
-            <button id="readBtn" type="button" disabled>Read Product Info</button>
+            <button id="readBtn" type="button" disabled>Identify Device</button>
           </div>
         </div>
 
@@ -513,7 +513,7 @@ class DeviceEnrollment extends HTMLElement {
               <input id="deviceNameInput" type="text" placeholder="Kitchen Sensor" required>
             </label>
           </div>
-          <p class="note">This flow reads the device public key, sends it to the server, and writes the encrypted provisioning bundle to the device in sequenced BLE chunks.</p>
+          <p class="note">This will securely register the device and transfer the setup configuration over Bluetooth.</p>
           <div id="error" class="error" role="alert"></div>
           <div style="margin-top: 18px;">
             <button id="enrollBtn" class="primary" type="button" disabled>Enroll And Provision</button>
@@ -524,7 +524,7 @@ class DeviceEnrollment extends HTMLElement {
 
         <div class="section">
           <div class="log-toolbar">
-            <h3>Provisioning Log</h3>
+            <h3>Setup Log</h3>
             <button id="clearLogBtn" type="button">Clear Log</button>
           </div>
           <div id="log" class="log" aria-live="polite"></div>
@@ -579,7 +579,7 @@ class DeviceEnrollment extends HTMLElement {
     }
 
     if (!navigator.bluetooth) {
-      this.setError("Web Bluetooth is not supported in this browser.");
+      this.setError("Your browser does not support Bluetooth connections. Please use Chrome or Edge.");
       return;
     }
 
@@ -601,7 +601,7 @@ class DeviceEnrollment extends HTMLElement {
       this.log(`Connecting to ${this.bluetoothDevice.name || "device"}...`, "info");
       this.gattServer = await this.bluetoothDevice.gatt.connect();
       this.mainService = await this.gattServer.getPrimaryService(SERVICE_UUID);
-      this.log("Connected to provisioning service.", "success");
+      this.log("Connected to device.", "success");
 
       await this.readProductInfo();
     } catch (error) {
@@ -655,10 +655,10 @@ class DeviceEnrollment extends HTMLElement {
 
       this.log(`Product detected: ${this.productName} (ID ${this.productId})`, "success");
 
-      this.log("Reading device public key chunks...", "info");
+      this.log("Reading device security data...", "info");
       const publicKeyTransfer = await readChunkedDevicePublicKey(this.mainService);
       this.devicePublicKeyB64 = bytesToBase64(publicKeyTransfer.bytes);
-      this.log(`Device public key read successfully in ${publicKeyTransfer.totalChunks} chunks.`, "success");
+      this.log("Device security data read successfully.", "success");
 
       this.syncUi();
     } catch (error) {
@@ -690,12 +690,12 @@ class DeviceEnrollment extends HTMLElement {
     }
 
     if (!this.productName || !this.productId) {
-      this.setError("Read the device product info before provisioning.");
+      this.setError("Identify the device before enrolling.");
       return;
     }
 
     if (!this.devicePublicKeyB64) {
-      this.setError("Device public key was not read. Reconnect and try again.");
+      this.setError("Device data was not read. Reconnect and try again.");
       return;
     }
 
@@ -711,7 +711,7 @@ class DeviceEnrollment extends HTMLElement {
     this.syncUi();
 
     try {
-      this.log("Creating backend device record with encrypted provisioning...", "info");
+      this.log("Registering device...", "info");
       const device = await postJSON(
         "/api/enroll/device",
         {
@@ -724,38 +724,38 @@ class DeviceEnrollment extends HTMLElement {
         this.apiBaseUrl,
       );
 
-      this.renderSummary(device, deviceName);
-      this.log(`Device record created with ID ${device.device_id}.`, "success");
+      this.renderSummary(deviceName);
+      this.log("Device registered.", "success");
 
       if (!device.provisioning_bundle) {
-        throw new Error("Server did not return an encrypted provisioning bundle.");
+        throw new Error("Setup configuration failed. Please try again.");
       }
 
-      this.log("Writing encrypted provisioning bundle to device...", "info");
+      this.log("Transferring setup configuration to device...", "info");
       const bundleBytes = base64ToBytes(device.provisioning_bundle);
       const packets = buildProvisioningChunks(bundleBytes);
       const blobCharacteristic = await this.mainService.getCharacteristic(UUIDS.provisioningBlob);
       for (let i = 0; i < packets.length; i += 1) {
         await writeWithResponse(blobCharacteristic, packets[i]);
-        this.log(`Provisioning chunk ${i + 1}/${packets.length} written (${packets[i].length} bytes).`, "success");
+        this.log(`Transferring... ${i + 1}/${packets.length}`, "success");
       }
-      this.log(`Provisioning bundle written (${bundleBytes.length} bytes total).`, "success");
+      this.log("Setup configuration transferred.", "success");
 
       this.log("Triggering save and restart...", "info");
       const restartCharacteristic = await this.mainService.getCharacteristic(UUIDS.restart);
       await restartCharacteristic.writeValue(new TextEncoder().encode("1"));
-      this.log("Encrypted provisioning data written. Waiting for the device to reboot and reconnect to MQTT...", "info");
+      this.log("Waiting for the device to restart and reconnect...", "info");
 
       const mqttStatus = await this.waitForDeviceOnline(device.device_id);
       if (!mqttStatus || !mqttStatus.mqtt_connected) {
-        this.renderSummary(device, deviceName, mqttStatus);
-        this.setError("Provisioning data was written, but MQTT reconnect was not observed within 60 seconds.");
-        this.log("Timed out waiting for the device to reconnect to MQTT.", "error");
+        this.renderSummary(deviceName, mqttStatus);
+        this.setError("Device setup completed, but it didn't reconnect within 60 seconds. Please wait or check the device.");
+        this.log("Device is taking longer than expected to reconnect.", "error");
         return;
       }
 
-      this.renderSummary(device, deviceName, mqttStatus);
-      this.log(`Device connected to MQTT after reboot at ${formatTimestamp(mqttStatus.last_seen_at)}.`, "success");
+      this.renderSummary(deviceName, mqttStatus);
+      this.log(`Device reconnected and is ready to use.`, "success");
       this.dispatchEvent(
         new CustomEvent("device-provisioned", {
           bubbles: true,
@@ -801,16 +801,13 @@ class DeviceEnrollment extends HTMLElement {
     return lastStatus;
   }
 
-  renderSummary(device, deviceName, mqttStatus = null) {
+  renderSummary(deviceName, mqttStatus = null) {
     this.summaryEl.classList.add("visible");
     this.summaryEl.innerHTML = [
       ["Device Name", deviceName],
-      ["Product Name", this.productName || "Unknown"],
-      ["Product ID", this.productId || "Unknown"],
-      ["Device ID", device.device_id],
-      ["Encrypted", device.provisioning_bundle ? "Yes" : "No"],
-      ["MQTT Reconnect", formatReconnectStatus(mqttStatus)],
-      ["Last MQTT Seen", formatTimestamp(mqttStatus?.last_seen_at)],
+      ["Product", this.productName || "Unknown"],
+      ["Status", formatReconnectStatus(mqttStatus)],
+      ["Last Connected", formatTimestamp(mqttStatus?.last_seen_at)],
     ]
       .map(
         ([label, value]) => `

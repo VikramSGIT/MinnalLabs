@@ -8,13 +8,13 @@ function homeProvisionState(home) {
 function homeProvisionLabel(home) {
   switch (homeProvisionState(home)) {
     case "pending":
-      return "MQTT provisioning pending";
+      return "Setting up";
     case "failed":
-      return "MQTT provisioning failed";
+      return "Setup failed";
     case "deleting":
       return "Deleting";
     default:
-      return "MQTT ready";
+      return "Ready";
   }
 }
 
@@ -74,7 +74,7 @@ class HomeCreateForm extends HTMLElement {
                     .map(
                       (home) => `
                         <option value="${home.home_id}" ${String(home.home_id) === this.selectedHomeId ? "selected" : ""}>
-                          ${escapeHtml(home.name)} (ID ${home.home_id}) - ${escapeHtml(homeProvisionLabel(home))}
+                          ${escapeHtml(home.name)} — ${escapeHtml(homeProvisionLabel(home))}
                         </option>
                       `,
                     )
@@ -287,7 +287,7 @@ class HomeCreateForm extends HTMLElement {
       </style>
       <section class="panel">
         <h2>Select Or Create Home</h2>
-        <p>Choose an existing home or create a new one with the Wi-Fi details for that home. MQTT credentials are generated immediately, and broker provisioning completes asynchronously in the background.</p>
+        <p>Choose an existing home or create a new one with your Wi-Fi details. The connection will be set up automatically.</p>
         <div class="badge">Signed in as ${escapeHtml(username)}</div>
         <section class="section">
           <h3>Previously Created Homes</h3>
@@ -425,7 +425,7 @@ class HomeCreateForm extends HTMLElement {
     if (!canSelectHome(home)) {
       this.setError(
         homeProvisionState(home) === "failed"
-          ? "This home failed MQTT provisioning. Delete it or wait for recovery before enrolling devices."
+          ? "This home failed setup. Delete it or wait for recovery before enrolling devices."
           : "This home is currently being deleted.",
       );
       return;
@@ -453,7 +453,7 @@ class HomeCreateForm extends HTMLElement {
     }
 
     const confirmed = window.confirm(
-      `Delete home "${home.name}"? Devices will disappear immediately and MQTT cleanup will continue in the background.`,
+      `Delete home "${home.name}"? All devices in this home will be removed. This cannot be undone.`,
     );
     if (!confirmed) {
       return;

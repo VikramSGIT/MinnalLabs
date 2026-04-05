@@ -98,7 +98,7 @@ class AppShell extends HTMLElement {
     }
 
     const steps = [
-      { label: "Login", status: user ? "complete" : "active" },
+      { label: user ? "Signed In" : "Sign In", status: user ? "complete" : "active" },
       { label: "Choose Home", status: user && page !== "admin" && !home ? "active" : home ? "complete" : "pending" },
       { label: "Manage Devices", status: page === "admin" ? "pending" : home ? "active" : "pending" },
     ];
@@ -283,7 +283,7 @@ class AppShell extends HTMLElement {
             <div>
               <h1>IoT Enrollment</h1>
               <p class="subtitle">
-                Sign in, choose or create a home with Wi-Fi and MQTT credentials, then manage devices and provision new ones over Web Bluetooth.
+                Manage your smart home devices. Create a home, enroll devices, and provision them over Bluetooth.
               </p>
             </div>
             <div class="actions">
@@ -297,11 +297,11 @@ class AppShell extends HTMLElement {
           <div class="meta">
             <article class="card">
               <p class="eyebrow">Signed In User</p>
-              <p class="value">${user ? `${escapeHtml(user.username)} (ID ${user.user_id})` : "Not signed in yet"}</p>
+              <p class="value">${user ? escapeHtml(user.username) : "Not signed in"}</p>
             </article>
             <article class="card">
               <p class="eyebrow">Current Home</p>
-              <p class="value">${page === "admin" ? "Firmware Admin" : home ? `${escapeHtml(home.name)} (ID ${home.home_id})` : "Select or create a home to continue"}</p>
+              <p class="value">${page === "admin" ? "Firmware Admin" : home ? escapeHtml(home.name) : "Select or create a home"}</p>
             </article>
           </div>
           <div class="steps">
@@ -377,8 +377,7 @@ class AppShell extends HTMLElement {
     if (this.state.isBootstrapping) {
       stage.innerHTML = `
         <section class="panel">
-          <h2>Checking Session</h2>
-          <p>Loading the current authenticated session...</p>
+          <p>Loading...</p>
         </section>
       `;
       return;

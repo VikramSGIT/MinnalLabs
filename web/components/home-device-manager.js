@@ -42,7 +42,7 @@ function statusMeta(device) {
     return `Last status update ${formatTimestamp(device.last_status_at)}`;
   }
 
-  return "No MQTT status seen yet";
+  return "No connection status yet";
 }
 
 function getDevicesSignature(devices) {
@@ -462,7 +462,7 @@ class HomeDeviceManager extends HTMLElement {
                     <div class="device-header">
                       <div>
                         <h3 class="device-title">${escapeHtml(device.name || "Unnamed Device")}</h3>
-                        <p class="device-subtitle">Device ID ${escapeHtml(device.device_id)} · Product ${escapeHtml(device.product_id)}</p>
+                        <p class="device-subtitle">${escapeHtml(device.product?.name || "Unknown Product")}</p>
                       </div>
                       <div class="device-actions">
                         <span class="badge ${statusClass(device)}">${statusLabel(device)}</span>
@@ -493,7 +493,7 @@ class HomeDeviceManager extends HTMLElement {
                     </div>
                     <div class="meta">
                       <div class="meta-item">
-                        <strong>MQTT Status</strong>
+                        <strong>Connection</strong>
                         <span>${escapeHtml(device.mqtt_status || "unknown")}</span>
                       </div>
                       <div class="meta-item">
@@ -505,11 +505,11 @@ class HomeDeviceManager extends HTMLElement {
                         <span>${escapeHtml(device.target_firmware_version || "None")}</span>
                       </div>
                       <div class="meta-item">
-                        <strong>Rollout State</strong>
+                        <strong>Update Status</strong>
                         <span>${escapeHtml(device.rollout_state || "None")}</span>
                       </div>
                       <div class="meta-item">
-                        <strong>Rollout Batch</strong>
+                        <strong>Update Batch</strong>
                         <span>${escapeHtml(device.rollout_batch_number || "None")}</span>
                       </div>
                       <div class="meta-item">
