@@ -3,7 +3,6 @@ package config
 import (
 	"log"
 	"net"
-	"net/http"
 	"strings"
 	"time"
 
@@ -38,27 +37,19 @@ type Config struct {
 	Frontend struct {
 		AllowedOrigins string
 	}
-	Session struct {
-		CookieName string
-		Domain     string
-		Secure     bool
-		SameSite   string
-	}
 	Valkey struct {
 		Addr     string
 		Password string
 	}
-	OAuth struct {
-		ClientID     string
-		ClientSecret string
-	}
 	Firmware struct {
 		StorageDir string
 	}
-	GoogleAuth struct {
-		ClientID     string `mapstructure:"client_id"`
-		ClientSecret string `mapstructure:"client_secret"`
-		RedirectURI  string `mapstructure:"redirect_uri"`
+	Ory struct {
+		KratosPublicURL string `mapstructure:"kratos_public_url"`
+		KratosAdminURL  string `mapstructure:"kratos_admin_url"`
+		HydraPublicURL  string `mapstructure:"hydra_public_url"`
+		HydraAdminURL   string `mapstructure:"hydra_admin_url"`
+		FrontendURL     string `mapstructure:"frontend_url"`
 	}
 	Pprof struct {
 		Enabled bool
@@ -97,18 +88,14 @@ func LoadConfig() *Config {
 	viper.SetDefault("mqtt.publish_retries", 3)
 	viper.SetDefault("mqtt.publish_retry_delay", "500ms")
 	viper.SetDefault("frontend.allowed_origins", "http://localhost,http://localhost:8080,http://127.0.0.1,http://127.0.0.1:8080,https://localhost,https://127.0.0.1")
-	viper.SetDefault("session.cookie_name", "user_session")
-	viper.SetDefault("session.domain", "")
-	viper.SetDefault("session.secure", true)
-	viper.SetDefault("session.same_site", "Lax")
 	viper.SetDefault("valkey.addr", "localhost:6379")
 	viper.SetDefault("valkey.password", "")
-	viper.SetDefault("oauth.client_id", "google-client")
-	viper.SetDefault("oauth.client_secret", "")
 	viper.SetDefault("firmware.storage_dir", "./firmware")
-	viper.SetDefault("googleauth.client_id", "")
-	viper.SetDefault("googleauth.client_secret", "")
-	viper.SetDefault("googleauth.redirect_uri", "")
+	viper.SetDefault("ory.kratos_public_url", "http://localhost:4433")
+	viper.SetDefault("ory.kratos_admin_url", "http://localhost:4434")
+	viper.SetDefault("ory.hydra_public_url", "http://localhost:4444")
+	viper.SetDefault("ory.hydra_admin_url", "http://localhost:4445")
+	viper.SetDefault("ory.frontend_url", "http://localhost:3000")
 	viper.SetDefault("pprof.enabled", false)
 	viper.SetDefault("pprof.addr", "127.0.0.1:6060")
 
@@ -181,23 +168,6 @@ func (c *Config) MQTTHostAndPort() (string, string) {
 	}
 
 	return host, port
-}
-
-func (c *Config) SessionTTL() time.Duration {
-	return 7 * 24 * time.Hour
-}
-
-func (c *Config) SessionSameSite() http.SameSite {
-	switch strings.ToLower(strings.TrimSpace(c.Session.SameSite)) {
-	case "strict":
-		return http.SameSiteStrictMode
-	case "none":
-		return http.SameSiteNoneMode
-	case "default":
-		return http.SameSiteDefaultMode
-	default:
-		return http.SameSiteLaxMode
-	}
 }
 
 func (c *Config) FirmwareStoragePath() string {

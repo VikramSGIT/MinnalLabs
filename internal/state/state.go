@@ -16,10 +16,9 @@ import (
 )
 
 var (
-	rdb        *redis.Client
-	ctx        = context.Background()
-	gdb        *gorm.DB
-	sessionTTL time.Duration
+	rdb *redis.Client
+	ctx = context.Background()
+	gdb *gorm.DB
 )
 
 // CapInfo holds the cached product-capability mapping.
@@ -62,7 +61,6 @@ const deviceIDsSet = "device_ids"
 
 func InitState(cfg *config.Config, db *gorm.DB) {
 	gdb = db
-	sessionTTL = cfg.SessionTTL()
 
 	rdb = redis.NewClient(&redis.Options{
 		Addr:     cfg.Valkey.Addr,

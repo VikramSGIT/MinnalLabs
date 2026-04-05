@@ -14,15 +14,14 @@ import (
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/iot-backend/internal/admin"
+	"github.com/iot-backend/internal/auth"
 	"github.com/iot-backend/internal/config"
 	"github.com/iot-backend/internal/db"
 	"github.com/iot-backend/internal/enrollment"
 	"github.com/iot-backend/internal/google"
-	"github.com/iot-backend/internal/googleauth"
 	"github.com/iot-backend/internal/homejobs"
 	"github.com/iot-backend/internal/middleware"
 	"github.com/iot-backend/internal/mqtt"
-	"github.com/iot-backend/internal/oauth"
 	"github.com/iot-backend/internal/ota"
 	"github.com/iot-backend/internal/state"
 )
@@ -46,7 +45,7 @@ func main() {
 	workerCtx, workerCancel := context.WithCancel(context.Background())
 	homejobs.NewWorker(db.DB).Start(workerCtx)
 
-	oauth.InitOAuth(cfg)
+	auth.Init(cfg)
 
 	r := gin.Default()
 	r.MaxMultipartMemory = 10 << 20
@@ -60,15 +59,10 @@ func main() {
 		MaxAge:           12 * time.Hour,
 	}))
 
-	oauth.SetupOAuthRoutes(r, cfg)
+	auth.SetupRoutes(r)
 	google.SetupGoogleRoutes(r)
 	enrollment.SetupEnrollmentRoutes(r, cfg)
 	admin.SetupAdminRoutes(r, cfg)
-
-	googleauth.SetupGoogleAuthRoutes(r, cfg)
-	if strings.EqualFold(strings.TrimSpace(cfg.Server.Profile), "stress") {
-		googleauth.SetupTestGoogleLoginRoute(r, cfg)
-	}
 
 	serverAddr := cfg.Server.Host + ":" + cfg.Server.Port
 	srv := &http.Server{

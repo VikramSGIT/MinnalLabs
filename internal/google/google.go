@@ -9,9 +9,9 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/iot-backend/internal/auth"
 	"github.com/iot-backend/internal/models"
 	"github.com/iot-backend/internal/mqtt"
-	"github.com/iot-backend/internal/oauth"
 	"github.com/iot-backend/internal/state"
 )
 
@@ -30,9 +30,9 @@ type GoogleResponse struct {
 
 func SetupGoogleRoutes(r *gin.Engine) {
 	api := r.Group("/api/google")
-	api.Use(oauth.RequireOAuthToken())
+	api.Use(auth.RequireOAuthToken())
 	api.POST("/fulfillment", func(c *gin.Context) {
-		principal, ok := oauth.CurrentOAuthPrincipal(c)
+		principal, ok := auth.CurrentOAuthPrincipal(c)
 		if !ok {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 			return

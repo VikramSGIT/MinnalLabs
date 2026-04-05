@@ -14,9 +14,9 @@ import (
 
 	sqlmock "github.com/DATA-DOG/go-sqlmock"
 	"github.com/gin-gonic/gin"
+	"github.com/iot-backend/internal/auth"
 	"github.com/iot-backend/internal/db"
 	"github.com/iot-backend/internal/models"
-	"github.com/iot-backend/internal/oauth"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
@@ -49,7 +49,7 @@ func enrollmentTestRouter() *gin.Engine {
 
 	router := gin.New()
 	router.Use(func(c *gin.Context) {
-		c.Set("session_user", oauth.SessionUser{UserID: 7, Username: "tester"})
+		c.Set("session_user", auth.SessionUser{UserID: 7, Username: "tester"})
 		c.Next()
 	})
 	router.GET("/homes", listHomes)

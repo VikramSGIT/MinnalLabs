@@ -16,13 +16,12 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/iot-backend/internal/auth"
 	"github.com/iot-backend/internal/config"
 	"github.com/iot-backend/internal/deletion"
 	"github.com/iot-backend/internal/db"
 	"github.com/iot-backend/internal/models"
-	"github.com/iot-backend/internal/oauth"
 	"github.com/iot-backend/internal/ota"
-	"github.com/iot-backend/internal/state"
 	"gorm.io/gorm"
 )
 
@@ -34,7 +33,7 @@ func SetupAdminRoutes(r *gin.Engine, appCfg *config.Config) {
 	cfg = appCfg
 
 	api := r.Group("/api/admin")
-	api.Use(oauth.RequireSession(), oauth.RequireAdmin())
+	api.Use(auth.RequireSession(), auth.RequireAdmin())
 	{
 		api.GET("/products", listProducts)
 		api.GET("/products/:productID/rollouts", listProductRollouts)
@@ -95,7 +94,7 @@ func deleteUser(c *gin.Context) {
 		return
 	}
 
-	sessionUser, ok := oauth.CurrentSessionUser(c)
+	sessionUser, ok := auth.CurrentSessionUser(c)
 	if !ok {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return
@@ -112,13 +111,8 @@ func deleteUser(c *gin.Context) {
 		return
 	}
 
-	state.DeleteSessionsForUser(userID)
-	if userID == sessionUser.UserID {
-		oauth.DestroyCurrentSession(c)
-	}
-	if err := oauth.PurgeTokensForUser(fmt.Sprintf("%d", userID)); err != nil {
-		log.Printf("Failed to purge oauth tokens for deleted user %d: %v", userID, err)
-	}
+	// Kratos and Hydra manage sessions/tokens externally.
+	_ = sessionUser // used only for the self-check above
 
 	c.JSON(http.StatusOK, gin.H{
 		"deleted":         true,
@@ -274,7 +268,7 @@ func rolloutFirmware(c *gin.Context) {
 		return
 	}
 
-	sessionUser, ok := oauth.CurrentSessionUser(c)
+	sessionUser, ok := auth.CurrentSessionUser(c)
 	if !ok {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return

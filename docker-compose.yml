@@ -3,20 +3,61 @@ services:
     image: valkey/valkey:8-alpine
     container_name: iot-valkey
     ports:
-      - 6379:6379
+      #- 6379:6379
     volumes:
       - valkeydata:/data
+    restart: unless-stopped
+
+  kratos:
+    image: oryd/kratos:v1.3
+    container_name: iot-kratos
+    command: sh -c "kratos migrate sql -e --yes && kratos serve -c /etc/config/kratos.yml --dev"
+    ports:
+     #- 4433:4433 # Public API: /login ,/registration ,/session.
+     #- 4434:4434 # Admin API.
+    environment:
+      - DSN=${KRATOS_DSN}
+      - KRATOS_DSN=${KRATOS_DSN}
+      - KRATOS_PUBLIC_BASE_URL=${KRATOS_PUBLIC_BASE_URL:-http://localhost:4433/}
+      - FRONTEND_URL=${FRONTEND_URL:-http://localhost:3000}
+      - GOOGLEAUTH_CLIENT_ID=${GOOGLEAUTH_CLIENT_ID:-}
+      - GOOGLEAUTH_CLIENT_SECRET=${GOOGLEAUTH_CLIENT_SECRET:-}
+      - SMTP_CONNECTION_URI=${SMTP_CONNECTION_URI:-smtp://localhost:587/}
+      - SMTP_FROM_ADDRESS=${SMTP_FROM_ADDRESS:-noreply@example.com}
+      - SMTP_FROM_NAME=${SMTP_FROM_NAME:-IoT Platform}
+    volumes:
+      - ./ory/kratos/kratos.yml:/etc/config/kratos.yml:ro
+      - ./ory/kratos/identity.schema.json:/etc/config/identity.schema.json:ro
+      - ./ory/kratos/oidc.google.jsonnet:/etc/config/oidc.google.jsonnet:ro
+      - ./ory/kratos/registration-hook.jsonnet:/etc/config/registration-hook.jsonnet:ro
+    restart: unless-stopped
+
+  hydra:
+    image: oryd/hydra:v2.3
+    container_name: iot-hydra
+    command: sh -c "hydra migrate sql -e --yes && hydra serve all --config /etc/config/hydra.yml"
+    ports:
+      #- 4444:4444 # Public API: /oauth2/auth, /oauth2/token
+      #- 4445:4445 # Admin API — only reachable internally via Docker network
+    environment:
+      - DSN=${HYDRA_DSN}
+      - HYDRA_DSN=${HYDRA_DSN}
+      - HYDRA_PUBLIC_URL=${HYDRA_PUBLIC_URL:-http://localhost:4444/}
+      - BACKEND_URL=http://backend:${BACKEND_PORT:-8080}
+      - FRONTEND_URL=${FRONTEND_URL:-http://localhost:3000}
+    volumes:
+      - ./ory/hydra/hydra.yml:/etc/config/hydra.yml:ro
     restart: unless-stopped
 
   backend:
     build: .
     container_name: iot-backend
     ports:
-      - 8080:8080
+      - ${BACKEND_PORT:-8080}:${BACKEND_PORT:-8080}
     volumes:
       - ./firmware:/app/firmware
     environment:
-      - SERVER_PORT=8080
+      - SERVER_PORT=${BACKEND_PORT:-8080}
       - DATABASE_HOST=${DATABASE_HOST}
       - DATABASE_USER=${DB_USER}
       - DATABASE_PASSWORD=${DB_PASSWORD}
@@ -27,22 +68,24 @@ services:
       - MQTT_USERNAME=${MQTT_USERNAME}
       - MQTT_PASSWORD=${MQTT_PASSWORD}
       - FRONTEND_ALLOWED_ORIGINS=${FRONTEND_ALLOWED_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
-      - SESSION_SECURE=${SESSION_SECURE:-false}
-      - OAUTH_CLIENT_SECRET=${OAUTH_CLIENT_SECRET:?set OAUTH_CLIENT_SECRET}
-      - GOOGLEAUTH_CLIENT_ID=${GOOGLEAUTH_CLIENT_ID:-}
-      - GOOGLEAUTH_CLIENT_SECRET=${GOOGLEAUTH_CLIENT_SECRET:-}
-      - GOOGLEAUTH_REDIRECT_URI=${GOOGLEAUTH_REDIRECT_URI:-}
       - VALKEY_ADDR=valkey:6379
       - FIRMWARE_STORAGE_DIR=/app/firmware
+      - ORY_KRATOS_PUBLIC_URL=http://kratos:4433
+      - ORY_KRATOS_ADMIN_URL=http://kratos:4434
+      - ORY_HYDRA_PUBLIC_URL=http://hydra:4444
+      - ORY_HYDRA_ADMIN_URL=http://hydra:4445
+      - ORY_FRONTEND_URL=${FRONTEND_URL:-http://localhost:3000}
     depends_on:
       - valkey
+      - kratos
+      - hydra
     restart: unless-stopped
 
   caddy:
-    image: caddy:2-alpine
+    image: caddy:alpine
     container_name: iot-firmware-caddy
     ports:
-      - 8081:80
+      #- 8081:80
     volumes:
       - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - ./firmware:/srv/firmware:ro
@@ -53,7 +96,7 @@ services:
       context: ./web
     container_name: iot-frontend
     ports:
-      - 3000:80
+      #- 3000:80
     environment:
       - API_BASE_URL=${FRONTEND_API_BASE_URL:-http://localhost:8080}
     depends_on:

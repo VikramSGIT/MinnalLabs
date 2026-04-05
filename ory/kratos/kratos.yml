@@ -1,0 +1,117 @@
+version: v1.3.0
+
+dsn: "${KRATOS_DSN}"
+
+serve:
+  public:
+    base_url: "${KRATOS_PUBLIC_BASE_URL:-http://localhost:4433/}"
+    cors:
+      enabled: true
+      allowed_origins:
+        - "${FRONTEND_URL:-http://localhost:3000}"
+      allowed_methods:
+        - GET
+        - POST
+        - PUT
+        - DELETE
+        - PATCH
+      allowed_headers:
+        - Authorization
+        - Content-Type
+        - Cookie
+        - X-Session-Token
+      exposed_headers:
+        - Set-Cookie
+      allow_credentials: true
+  admin:
+    base_url: http://kratos:4434/
+
+selfservice:
+  default_browser_return_url: "${FRONTEND_URL:-http://localhost:3000/}"
+
+  methods:
+    password:
+      enabled: true
+      config:
+        haveibeenpwned_enabled: false
+        min_password_length: 8
+    code:
+      enabled: true
+      config:
+        lifespan: 15m
+    oidc:
+      enabled: true
+      config:
+        providers:
+          - id: google
+            provider: google
+            client_id: "${GOOGLEAUTH_CLIENT_ID}"
+            client_secret: "${GOOGLEAUTH_CLIENT_SECRET}"
+            mapper_url: file:///etc/config/oidc.google.jsonnet
+            scope:
+              - openid
+              - email
+              - profile
+
+  flows:
+    login:
+      ui_url: "${FRONTEND_URL:-http://localhost:3000}/login"
+      lifespan: 10m
+    registration:
+      ui_url: "${FRONTEND_URL:-http://localhost:3000}/registration"
+      lifespan: 10m
+      after:
+        password:
+          hooks:
+            - hook: web_hook
+              config:
+                url: http://backend:8080/internal/hooks/registration
+                method: POST
+                body: file:///etc/config/registration-hook.jsonnet
+                can_interrupt: false
+                response:
+                  ignore: true
+        oidc:
+          hooks:
+            - hook: web_hook
+              config:
+                url: http://backend:8080/internal/hooks/registration
+                method: POST
+                body: file:///etc/config/registration-hook.jsonnet
+                can_interrupt: false
+                response:
+                  ignore: true
+    logout:
+      after:
+        default_browser_return_url: "${FRONTEND_URL:-http://localhost:3000/}"
+    verification:
+      enabled: true
+      ui_url: "${FRONTEND_URL:-http://localhost:3000}/verification"
+      use: code
+      lifespan: 15m
+      after:
+        default_browser_return_url: "${FRONTEND_URL:-http://localhost:3000}/"
+    settings:
+      ui_url: "${FRONTEND_URL:-http://localhost:3000}/settings"
+
+session:
+  lifespan: 168h
+  cookie:
+    name: ory_kratos_session
+    same_site: Lax
+
+identity:
+  default_schema_id: user
+  schemas:
+    - id: user
+      url: file:///etc/config/identity.schema.json
+
+courier:
+  smtp:
+    connection_uri: "${SMTP_CONNECTION_URI:-smtp://localhost:587/}"
+    from_address: "${SMTP_FROM_ADDRESS:-noreply@example.com}"
+    from_name: "${SMTP_FROM_NAME:-IoT Platform}"
+
+log:
+  level: info
+  format: json

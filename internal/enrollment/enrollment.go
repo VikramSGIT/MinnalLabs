@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/iot-backend/internal/auth"
 	"github.com/iot-backend/internal/config"
 	devcrypto "github.com/iot-backend/internal/crypto"
 	"github.com/iot-backend/internal/deletion"
@@ -19,11 +20,9 @@ import (
 	"github.com/iot-backend/internal/homejobs"
 	"github.com/iot-backend/internal/models"
 	"github.com/iot-backend/internal/mqtt"
-	"github.com/iot-backend/internal/oauth"
 	"github.com/iot-backend/internal/ota"
 	"github.com/iot-backend/internal/state"
 	"github.com/iot-backend/internal/validation"
-	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 )
 
@@ -54,10 +53,8 @@ func SetupEnrollmentRoutes(r *gin.Engine, appCfg *config.Config) {
 
 	api := r.Group("/api/enroll")
 	{
-		api.POST("/user", enrollUser)
-
 		protected := api.Group("")
-		protected.Use(oauth.RequireSession())
+		protected.Use(auth.RequireSession())
 		protected.GET("/homes", listHomes)
 		protected.GET("/home/:homeID/devices", listHomeDevices)
 		protected.DELETE("/home/:homeID", deleteHome)
@@ -69,49 +66,8 @@ func SetupEnrollmentRoutes(r *gin.Engine, appCfg *config.Config) {
 	}
 }
 
-func enrollUser(c *gin.Context) {
-	var req struct {
-		Username string `json:"username" binding:"required"`
-		Password string `json:"password" binding:"required"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
-		return
-	}
-
-	req.Username = validation.NormalizeUsername(req.Username)
-	if err := validation.ValidateUsername(req.Username); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-	if err := validation.ValidatePassword(req.Password); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	hashed, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to hash password"})
-		return
-	}
-
-	user := models.User{
-		Username: req.Username,
-		Password: string(hashed),
-	}
-	if err := db.DB.Create(&user).Error; err != nil {
-		c.JSON(http.StatusConflict, gin.H{"error": "username already exists"})
-		return
-	}
-
-	c.JSON(http.StatusCreated, gin.H{
-		"user_id":  user.ID,
-		"username": user.Username,
-	})
-}
-
 func listHomes(c *gin.Context) {
-	sessionUser, ok := oauth.CurrentSessionUser(c)
+	sessionUser, ok := auth.CurrentSessionUser(c)
 	if !ok {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return
@@ -168,7 +124,7 @@ func firmwareURL(product models.Product) string {
 }
 
 func listHomeDevices(c *gin.Context) {
-	sessionUser, ok := oauth.CurrentSessionUser(c)
+	sessionUser, ok := auth.CurrentSessionUser(c)
 	if !ok {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return
@@ -249,7 +205,7 @@ func listHomeDevices(c *gin.Context) {
 }
 
 func getDeviceStatus(c *gin.Context) {
-	sessionUser, ok := oauth.CurrentSessionUser(c)
+	sessionUser, ok := auth.CurrentSessionUser(c)
 	if !ok {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return
@@ -315,7 +271,7 @@ func getDeviceStatus(c *gin.Context) {
 }
 
 func triggerDeviceUpdate(c *gin.Context) {
-	sessionUser, ok := oauth.CurrentSessionUser(c)
+	sessionUser, ok := auth.CurrentSessionUser(c)
 	if !ok {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return
@@ -376,7 +332,7 @@ func triggerDeviceUpdate(c *gin.Context) {
 }
 
 func deleteHome(c *gin.Context) {
-	sessionUser, ok := oauth.CurrentSessionUser(c)
+	sessionUser, ok := auth.CurrentSessionUser(c)
 	if !ok {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return
@@ -416,7 +372,7 @@ func deleteHome(c *gin.Context) {
 }
 
 func deleteDevice(c *gin.Context) {
-	sessionUser, ok := oauth.CurrentSessionUser(c)
+	sessionUser, ok := auth.CurrentSessionUser(c)
 	if !ok {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return
@@ -457,7 +413,7 @@ func deleteDevice(c *gin.Context) {
 }
 
 func enrollHome(c *gin.Context) {
-	sessionUser, ok := oauth.CurrentSessionUser(c)
+	sessionUser, ok := auth.CurrentSessionUser(c)
 	if !ok {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return
@@ -548,7 +504,7 @@ func enrollHome(c *gin.Context) {
 }
 
 func enrollDevice(c *gin.Context) {
-	sessionUser, ok := oauth.CurrentSessionUser(c)
+	sessionUser, ok := auth.CurrentSessionUser(c)
 	if !ok {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return

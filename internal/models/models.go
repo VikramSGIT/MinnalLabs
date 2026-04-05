@@ -9,14 +9,14 @@ import (
 )
 
 type User struct {
-	ID        uint           `gorm:"primarykey" json:"id"`
-	CreatedAt time.Time      `json:"created_at"`
-	UpdatedAt time.Time      `json:"updated_at"`
-	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
-	Username  string         `gorm:"uniqueIndex" json:"username"`
-	Password  string         `json:"-"`
-	GoogleSub string         `gorm:"column:google_sub" json:"-"`
-	Homes     []Home         `json:"homes,omitempty"`
+	ID               uint           `gorm:"primarykey" json:"id"`
+	CreatedAt        time.Time      `json:"created_at"`
+	UpdatedAt        time.Time      `json:"updated_at"`
+	DeletedAt        gorm.DeletedAt `gorm:"index" json:"-"`
+	Username         string         `gorm:"uniqueIndex" json:"username"`
+	Password         string         `json:"-"`
+	KratosIdentityID string         `gorm:"column:kratos_identity_id" json:"-"`
+	Homes            []Home         `json:"homes,omitempty"`
 }
 
 type AdminUser struct {
@@ -189,33 +189,6 @@ type HomeMQTTJob struct {
 }
 
 func (HomeMQTTJob) TableName() string { return "home_mqtt_jobs" }
-
-// OAuth models
-
-type OAuthClient struct {
-	ID     string `gorm:"primaryKey"`
-	Secret string
-	Domain string
-	UserID string
-}
-
-func (OAuthClient) TableName() string { return "oauth_clients" }
-
-type OAuthToken struct {
-	ID        uint       `gorm:"primaryKey"`
-	ClientID  string     `gorm:"column:client_id"`
-	UserID    string     `gorm:"column:user_id"`
-	Code      string     `gorm:"column:code"`
-	Access    string     `gorm:"column:access"`
-	Refresh   string     `gorm:"column:refresh"`
-	Data      string     `gorm:"column:data"`
-	ExpiresIn int64      `gorm:"column:expires_in"`
-	ExpiresAt *time.Time `gorm:"column:expires_at"`
-	CreatedAt time.Time  `gorm:"column:created_at"`
-	UpdatedAt time.Time  `gorm:"column:updated_at"`
-}
-
-func (OAuthToken) TableName() string { return "oauth_tokens" }
 
 // BuildTopic constructs an MQTT topic from device/capability data.
 // action is either "state" or "command".

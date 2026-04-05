@@ -1,0 +1,3 @@
+DROP TABLE IF EXISTS oauth_tokens;
+DROP TABLE IF EXISTS oauth_clients;
+ALTER TABLE users ALTER COLUMN password DROP NOT NULL;
