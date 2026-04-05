@@ -78,11 +78,12 @@ services:
       - COURIER_SMTP_CONNECTION_URI=${SMTP_CONNECTION_URI:-smtp://localhost:587/}
       - COURIER_SMTP_FROM_ADDRESS=${SMTP_FROM_ADDRESS:-noreply@example.com}
       - COURIER_SMTP_FROM_NAME=${SMTP_FROM_NAME:-IoT Platform}
+      # Rate limit: verification flow lifespan prevents re-sending within this window
+      - SELFSERVICE_FLOWS_VERIFICATION_LIFESPAN=15m
     volumes:
       - ./ory/kratos/kratos.yml:/etc/config/kratos.yml:ro
       - ./ory/kratos/identity.schema.json:/etc/config/identity.schema.json:ro
       - ./ory/kratos/oidc.google.jsonnet:/etc/config/oidc.google.jsonnet:ro
-      - ./ory/kratos/registration-hook.jsonnet:/etc/config/registration-hook.jsonnet:ro
     restart: unless-stopped
 
   hydra-migrate:

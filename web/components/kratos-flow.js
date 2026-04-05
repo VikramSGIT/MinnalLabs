@@ -464,9 +464,33 @@ class KratosFlow extends HTMLElement {
 
     // Code group (verification)
     if (groups.code) {
-      html += '<div class="group-section">';
-      html += this.renderNodes(groups.code);
-      html += "</div>";
+      if (this.flowType === "verification") {
+        // Render email field first (editable), then code field below
+        const emailNodes = groups.code.filter((n) => n.attributes && n.attributes.name === "email");
+        const codeNodes = groups.code.filter((n) => n.attributes && n.attributes.name === "code");
+        const otherNodes = groups.code.filter(
+          (n) => !n.attributes || (n.attributes.name !== "email" && n.attributes.name !== "code"),
+        );
+        if (emailNodes.length > 0) {
+          html += '<div class="group-section">';
+          html += this.renderNodes(emailNodes);
+          html += "</div>";
+        }
+        if (codeNodes.length > 0) {
+          html += '<div class="group-section">';
+          html += this.renderNodes(codeNodes);
+          html += "</div>";
+        }
+        if (otherNodes.length > 0) {
+          html += '<div class="group-section">';
+          html += this.renderNodes(otherNodes);
+          html += "</div>";
+        }
+      } else {
+        html += '<div class="group-section">';
+        html += this.renderNodes(groups.code);
+        html += "</div>";
+      }
     }
 
     // Profile group (settings)

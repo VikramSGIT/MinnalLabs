@@ -62,11 +62,17 @@ func RequireSession() gin.HandlerFunc {
 			return
 		}
 
-		// Look up the app user by Kratos identity ID.
+		// Look up the app user by Kratos identity ID — create on first verified login.
 		var user models.User
 		if err := db.DB.Where("kratos_identity_id = ?", sess.Identity.ID).First(&user).Error; err != nil {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "user not found"})
-			return
+			user = models.User{KratosIdentityID: sess.Identity.ID}
+			if err := db.DB.Create(&user).Error; err != nil {
+				// Race condition: another request created it first.
+				if db.DB.Where("kratos_identity_id = ?", sess.Identity.ID).First(&user).Error != nil {
+					c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "failed to create user"})
+					return
+				}
+			}
 		}
 
 		isAdmin := isAdminUser(user.ID)

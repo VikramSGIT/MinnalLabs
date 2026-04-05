@@ -14,11 +14,6 @@ import (
 
 // SetupRoutes registers internal auth-related endpoints.
 func SetupRoutes(r *gin.Engine) {
-	internal := r.Group("/internal")
-	{
-		internal.POST("/hooks/registration", handleRegistrationHook)
-	}
-
 	// Auth API endpoints.
 	authAPI := r.Group("/api/auth")
 	{

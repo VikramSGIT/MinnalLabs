@@ -52,25 +52,10 @@ selfservice:
       after:
         password:
           hooks:
-            - hook: web_hook
-              config:
-                url: http://backend:8080/internal/hooks/registration
-                method: POST
-                body: file:///etc/config/registration-hook.jsonnet
-                can_interrupt: false
-                response:
-                  ignore: true
             - hook: show_verification_ui
         oidc:
           hooks:
-            - hook: web_hook
-              config:
-                url: http://backend:8080/internal/hooks/registration
-                method: POST
-                body: file:///etc/config/registration-hook.jsonnet
-                can_interrupt: false
-                response:
-                  ignore: true
+            - hook: show_verification_ui
     logout: {}
     verification:
       enabled: true
