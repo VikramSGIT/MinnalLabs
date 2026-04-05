@@ -1,10 +1,12 @@
 import { getFrontendConfig } from "../lib/config.js";
-import { ApiError, postJSON, requestJSON } from "../lib/api.js";
+import { ApiError, requestJSON } from "../lib/api.js";
 import { escapeHtml } from "../lib/html.js";
 import "./admin-firmware-manager.js";
 import "./home-device-manager.js";
 import "./home-create-form.js";
-import "./login-form.js";
+import "./kratos-flow.js";
+
+const AUTH_ROUTES = new Set(["login", "registration", "verification"]);
 
 class AppShell extends HTMLElement {
   constructor() {
@@ -15,6 +17,7 @@ class AppShell extends HTMLElement {
       user: null,
       home: null,
       page: "enrollment",
+      route: "app",
       isBootstrapping: true,
       sessionError: "",
     };
@@ -24,21 +27,76 @@ class AppShell extends HTMLElement {
   connectedCallback() {
     if (!this.sessionEventsBound) {
       this.shadowRoot.addEventListener("session-expired", () => {
-        this.state.user = null;
-        this.state.home = null;
-        this.state.page = "enrollment";
-        this.state.sessionError = "Your session expired. Please sign in again.";
+        window.location.href = "/self-service/login/browser";
+      });
+      window.addEventListener("popstate", () => {
+        this.resolveRoute();
         this.render();
       });
       this.sessionEventsBound = true;
     }
 
+    this.resolveRoute();
     this.render();
-    this.bootstrapSession();
+
+    if (AUTH_ROUTES.has(this.state.route)) {
+      this.state.isBootstrapping = false;
+      this.render();
+    } else if (this.state.route === "settings") {
+      this.bootstrapSession().then(() => {
+        if (!this.state.user) {
+          window.location.href = "/self-service/login/browser?return_to=/settings";
+        }
+      });
+    } else {
+      this.bootstrapSession();
+    }
+  }
+
+  resolveRoute() {
+    const path = window.location.pathname.replace(/^\/+/, "");
+    if (["login", "registration", "verification", "settings"].includes(path)) {
+      this.state.route = path;
+    } else {
+      this.state.route = "app";
+    }
   }
 
   render() {
-    const { user, home, page, isBootstrapping, sessionError } = this.state;
+    const { user, home, page, isBootstrapping, sessionError, route } = this.state;
+
+    // Auth flow routes get a minimal shell
+    if (AUTH_ROUTES.has(route) || route === "settings") {
+      this.shadowRoot.innerHTML = `
+        <style>
+          :host {
+            display: block;
+            box-sizing: border-box;
+            min-height: 100vh;
+            padding: 32px 20px;
+          }
+          *, *::before, *::after { box-sizing: border-box; }
+          .shell {
+            width: min(480px, 100%);
+            margin: 0 auto;
+            display: grid;
+            gap: 24px;
+          }
+          h1 {
+            margin: 0;
+            font-size: 1.8rem;
+            text-align: center;
+          }
+        </style>
+        <div class="shell">
+          <h1>IoT Platform</h1>
+          <div id="stage"></div>
+        </div>
+      `;
+      this.renderStage();
+      return;
+    }
+
     const steps = [
       { label: "Login", status: user ? "complete" : "active" },
       { label: "Choose Home", status: user && page !== "admin" && !home ? "active" : home ? "complete" : "pending" },
@@ -237,10 +295,6 @@ class AppShell extends HTMLElement {
           </div>
           <div class="meta">
             <article class="card">
-              <p class="eyebrow">API Base URL</p>
-              <p class="value">${escapeHtml(this.config.apiBaseUrl)}</p>
-            </article>
-            <article class="card">
               <p class="eyebrow">Signed In User</p>
               <p class="value">${user ? `${escapeHtml(user.username)} (ID ${user.user_id})` : "Not signed in yet"}</p>
             </article>
@@ -304,26 +358,26 @@ class AppShell extends HTMLElement {
     const stage = this.shadowRoot.getElementById("stage");
     stage.innerHTML = "";
 
+    // Kratos auth flow routes
+    if (AUTH_ROUTES.has(this.state.route) || this.state.route === "settings") {
+      const kratosFlow = document.createElement("kratos-flow");
+      kratosFlow.setAttribute("flow-type", this.state.route);
+      stage.append(kratosFlow);
+      return;
+    }
+
     if (this.state.isBootstrapping) {
       stage.innerHTML = `
         <section class="panel">
           <h2>Checking Session</h2>
-          <p>Loading the current authenticated session from the backend...</p>
+          <p>Loading the current authenticated session...</p>
         </section>
       `;
       return;
     }
 
     if (!this.state.user) {
-      const loginForm = document.createElement("login-form");
-      loginForm.apiBaseUrl = this.config.apiBaseUrl;
-      loginForm.addEventListener("login-success", (event) => {
-        this.state.user = event.detail;
-        this.state.page = "enrollment";
-        this.state.sessionError = "";
-        this.render();
-      });
-      stage.append(loginForm);
+      window.location.href = "/self-service/login/browser";
       return;
     }
 
@@ -384,15 +438,15 @@ class AppShell extends HTMLElement {
 
   async handleSignOut() {
     try {
-      await postJSON("/api/session/logout", {}, this.config.apiBaseUrl);
+      const resp = await fetch("/self-service/logout/browser", {
+        headers: { Accept: "application/json" },
+        credentials: "include",
+      });
+      if (!resp.ok) throw new Error("Failed to create logout flow");
+      const data = await resp.json();
+      window.location.href = data.logout_url;
     } catch (error) {
-      if (!(error instanceof ApiError && error.status === 401)) {
-        this.state.sessionError = error.message;
-      }
-    } finally {
-      this.state.user = null;
-      this.state.home = null;
-      this.state.page = "enrollment";
+      this.state.sessionError = error.message;
       this.render();
     }
   }
