@@ -1,9 +1,30 @@
 services:
+  traefik:
+    image: traefik:v3.4
+    container_name: iot-traefik
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL}
+      - --certificatesresolvers.letsencrypt.acme.storage=/acme/acme.json
+      - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
+    ports:
+      - 80:80
+      - 443:443
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - acmedata:/acme
+    restart: unless-stopped
+
   valkey:
     image: valkey/valkey:8-alpine
     container_name: iot-valkey
-    ports:
-      #- 6379:6379
+    labels:
+      - traefik.enable=false
     volumes:
       - valkeydata:/data
     restart: unless-stopped
@@ -12,14 +33,17 @@ services:
     image: oryd/kratos:v1.3
     container_name: iot-kratos
     command: sh -c "kratos migrate sql -e --yes && kratos serve -c /etc/config/kratos.yml --dev"
-    ports:
-     #- 4433:4433 # Public API: /login ,/registration ,/session.
-     #- 4434:4434 # Admin API.
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.kratos.rule=Host(`${DOMAIN}`) && (PathPrefix(`/self-service/`) || PathPrefix(`/sessions/`) || PathPrefix(`/schemas/`))
+      - traefik.http.routers.kratos.entrypoints=websecure
+      - traefik.http.routers.kratos.tls.certresolver=letsencrypt
+      - traefik.http.services.kratos.loadbalancer.server.port=4433
     environment:
       - DSN=${KRATOS_DSN}
       - KRATOS_DSN=${KRATOS_DSN}
-      - KRATOS_PUBLIC_BASE_URL=${KRATOS_PUBLIC_BASE_URL:-http://localhost:4433/}
-      - FRONTEND_URL=${FRONTEND_URL:-http://localhost:3000}
+      - KRATOS_PUBLIC_BASE_URL=https://${DOMAIN}/
+      - FRONTEND_URL=https://${DOMAIN}
       - GOOGLEAUTH_CLIENT_ID=${GOOGLEAUTH_CLIENT_ID:-}
       - GOOGLEAUTH_CLIENT_SECRET=${GOOGLEAUTH_CLIENT_SECRET:-}
       - SMTP_CONNECTION_URI=${SMTP_CONNECTION_URI:-smtp://localhost:587/}
@@ -36,15 +60,18 @@ services:
     image: oryd/hydra:v2.3
     container_name: iot-hydra
     command: sh -c "hydra migrate sql -e --yes && hydra serve all --config /etc/config/hydra.yml"
-    ports:
-      #- 4444:4444 # Public API: /oauth2/auth, /oauth2/token
-      #- 4445:4445 # Admin API — only reachable internally via Docker network
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.hydra.rule=Host(`${DOMAIN}`) && (PathPrefix(`/oauth2/`) || PathPrefix(`/.well-known/`))
+      - traefik.http.routers.hydra.entrypoints=websecure
+      - traefik.http.routers.hydra.tls.certresolver=letsencrypt
+      - traefik.http.services.hydra.loadbalancer.server.port=4444
     environment:
       - DSN=${HYDRA_DSN}
       - HYDRA_DSN=${HYDRA_DSN}
-      - HYDRA_PUBLIC_URL=${HYDRA_PUBLIC_URL:-http://localhost:4444/}
+      - HYDRA_PUBLIC_URL=https://${DOMAIN}/
       - BACKEND_URL=http://backend:${BACKEND_PORT:-8080}
-      - FRONTEND_URL=${FRONTEND_URL:-http://localhost:3000}
+      - FRONTEND_URL=https://${DOMAIN}
     volumes:
       - ./ory/hydra/hydra.yml:/etc/config/hydra.yml:ro
     restart: unless-stopped
@@ -52,8 +79,12 @@ services:
   backend:
     build: .
     container_name: iot-backend
-    ports:
-      #- ${BACKEND_PORT:-8080}:${BACKEND_PORT:-8080}
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.backend.rule=Host(`${DOMAIN}`) && (PathPrefix(`/api/`) || PathPrefix(`/oauth/`))
+      - traefik.http.routers.backend.entrypoints=websecure
+      - traefik.http.routers.backend.tls.certresolver=letsencrypt
+      - traefik.http.services.backend.loadbalancer.server.port=${BACKEND_PORT:-8080}
     volumes:
       - ./firmware:/app/firmware
     environment:
@@ -67,14 +98,14 @@ services:
       - MQTT_PORT=${MQTT_PORT}
       - MQTT_USERNAME=${MQTT_USERNAME}
       - MQTT_PASSWORD=${MQTT_PASSWORD}
-      - FRONTEND_ALLOWED_ORIGINS=${FRONTEND_ALLOWED_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
+      - FRONTEND_ALLOWED_ORIGINS=https://${DOMAIN}
       - VALKEY_ADDR=valkey:6379
       - FIRMWARE_STORAGE_DIR=/app/firmware
       - ORY_KRATOS_PUBLIC_URL=http://kratos:4433
       - ORY_KRATOS_ADMIN_URL=http://kratos:4434
       - ORY_HYDRA_PUBLIC_URL=http://hydra:4444
       - ORY_HYDRA_ADMIN_URL=http://hydra:4445
-      - ORY_FRONTEND_URL=${FRONTEND_URL:-http://localhost:3000}
+      - ORY_FRONTEND_URL=https://${DOMAIN}
     depends_on:
       - valkey
       - kratos
@@ -84,8 +115,12 @@ services:
   caddy:
     image: caddy:alpine
     container_name: iot-firmware-caddy
-    ports:
-      #- 8081:80
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.firmware.rule=Host(`${DOMAIN}`) && PathPrefix(`/firmware/`)
+      - traefik.http.routers.firmware.entrypoints=websecure
+      - traefik.http.routers.firmware.tls.certresolver=letsencrypt
+      - traefik.http.services.firmware.loadbalancer.server.port=80
     volumes:
       - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - ./firmware:/srv/firmware:ro
@@ -95,13 +130,19 @@ services:
     build:
       context: ./web
     container_name: iot-frontend
-    ports:
-      #- 3000:80
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.frontend.rule=Host(`${DOMAIN}`)
+      - traefik.http.routers.frontend.entrypoints=websecure
+      - traefik.http.routers.frontend.tls.certresolver=letsencrypt
+      - traefik.http.routers.frontend.priority=1
+      - traefik.http.services.frontend.loadbalancer.server.port=80
     environment:
-      - API_BASE_URL=${FRONTEND_API_BASE_URL:-http://localhost:8080}
+      - API_BASE_URL=https://${DOMAIN}
     depends_on:
       - backend
     restart: unless-stopped
 
 volumes:
   valkeydata:
+  acmedata:
