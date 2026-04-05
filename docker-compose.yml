@@ -53,7 +53,7 @@ services:
     build: .
     container_name: iot-backend
     ports:
-      - ${BACKEND_PORT:-8080}:${BACKEND_PORT:-8080}
+      #- ${BACKEND_PORT:-8080}:${BACKEND_PORT:-8080}
     volumes:
       - ./firmware:/app/firmware
     environment:
