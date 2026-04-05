@@ -132,11 +132,19 @@ func handleOAuthConsentPage(c *gin.Context) {
 		return
 	}
 
-	// Look up the app user.
+	// Verify the app user exists.
 	var user models.User
 	if err := db.DB.Where("kratos_identity_id = ?", consentReq.Subject).First(&user).Error; err != nil {
 		log.Printf("user not found for kratos_identity_id=%s: %v", consentReq.Subject, err)
 		c.String(http.StatusForbidden, "user not found")
+		return
+	}
+
+	// Fetch username from Kratos (source of truth for identity data).
+	identity, err := getKratosIdentity(ctx, consentReq.Subject)
+	if err != nil {
+		log.Printf("error fetching kratos identity %s: %v", consentReq.Subject, err)
+		c.String(http.StatusInternalServerError, "failed to fetch identity")
 		return
 	}
 
@@ -145,7 +153,7 @@ func handleOAuthConsentPage(c *gin.Context) {
 		Challenge:  challenge,
 		ClientID:   consentReq.Client.ClientID,
 		Scopes:     consentReq.RequestedScope,
-		Username:   user.Username,
+		Username:   identity.Traits.Username,
 	}
 
 	c.Header("Content-Type", "text/html; charset=utf-8")

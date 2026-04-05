@@ -2,7 +2,6 @@ package auth
 
 import (
 	"net/http"
-	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/iot-backend/internal/db"
@@ -13,12 +12,11 @@ import (
 // (shaped by ory/kratos/registration-hook.jsonnet).
 type registrationPayload struct {
 	IdentityID string `json:"identity_id" binding:"required"`
-	Username   string `json:"username" binding:"required"`
-	Email      string `json:"email"`
 }
 
 // handleRegistrationHook creates an app-level user row when Kratos registers
 // a new identity. This is called by the Kratos after-registration webhook.
+// The row is a pure ID mapping — all identity data (username, email) lives in Kratos.
 func handleRegistrationHook(c *gin.Context) {
 	var payload registrationPayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
@@ -26,14 +24,7 @@ func handleRegistrationHook(c *gin.Context) {
 		return
 	}
 
-	payload.Username = strings.TrimSpace(payload.Username)
-	if payload.Username == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "username is required"})
-		return
-	}
-
 	user := models.User{
-		Username:         payload.Username,
 		KratosIdentityID: payload.IdentityID,
 	}
 	if err := db.DB.Create(&user).Error; err != nil {

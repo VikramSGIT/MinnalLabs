@@ -65,16 +65,19 @@ func RequireSession() gin.HandlerFunc {
 
 		isAdmin := isAdminUser(user.ID)
 
+		// Username comes from Kratos identity traits, not the app DB.
+		username := sess.Identity.Traits.Username
+
 		// Cache the resolved session.
 		cacheSession(cookie, cachedSessionInfo{
 			UserID:   user.ID,
-			Username: user.Username,
+			Username: username,
 			IsAdmin:  isAdmin,
 		})
 
 		c.Set(sessionUserContextKey, SessionUser{
 			UserID:   user.ID,
-			Username: user.Username,
+			Username: username,
 			IsAdmin:  isAdmin,
 		})
 		c.Next()

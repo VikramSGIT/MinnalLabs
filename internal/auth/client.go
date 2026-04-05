@@ -18,6 +18,7 @@ import (
 
 var (
 	kratosPublicURL string
+	kratosAdminURL  string
 	hydraAdminURL   string
 	frontendURL     string
 )
@@ -25,6 +26,7 @@ var (
 // Init initialises the Ory client URLs from application config.
 func Init(cfg *config.Config) {
 	kratosPublicURL = cfg.Ory.KratosPublicURL
+	kratosAdminURL = cfg.Ory.KratosAdminURL
 	hydraAdminURL = cfg.Ory.HydraAdminURL
 	frontendURL = cfg.Ory.FrontendURL
 }
@@ -87,6 +89,45 @@ func lookupKratosSession(ctx context.Context, cookie string) (*kratosSession, er
 		return nil, fmt.Errorf("session not active")
 	}
 	return &sess, nil
+}
+
+// kratosIdentity is the subset of the Kratos admin GET /identities/{id} response we need.
+type kratosIdentity struct {
+	ID     string `json:"id"`
+	Traits struct {
+		Username string `json:"username"`
+		Email    string `json:"email"`
+		Name     string `json:"name"`
+	} `json:"traits"`
+}
+
+// getKratosIdentity calls the Kratos admin API to fetch an identity by ID.
+func getKratosIdentity(ctx context.Context, kratosID string) (*kratosIdentity, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, kratosAdminURL+"/admin/identities/"+url.PathEscape(kratosID), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("kratos admin returned %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	var identity kratosIdentity
+	if err := json.Unmarshal(body, &identity); err != nil {
+		return nil, err
+	}
+	return &identity, nil
 }
 
 // introspectResult is the subset of the Hydra introspection response we need.

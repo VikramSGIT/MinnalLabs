@@ -13,8 +13,6 @@ type User struct {
 	CreatedAt        time.Time      `json:"created_at"`
 	UpdatedAt        time.Time      `json:"updated_at"`
 	DeletedAt        gorm.DeletedAt `gorm:"index" json:"-"`
-	Username         string         `gorm:"uniqueIndex" json:"username"`
-	Password         string         `json:"-"`
 	KratosIdentityID string         `gorm:"column:kratos_identity_id" json:"-"`
 	Homes            []Home         `json:"homes,omitempty"`
 }
