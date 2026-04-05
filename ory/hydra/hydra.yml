@@ -1,21 +1,21 @@
-dsn: "${HYDRA_DSN}"
+dsn: $HYDRA_DSN
 
 serve:
   public:
     cors:
       enabled: true
       allowed_origins:
-        - "${FRONTEND_URL:-http://localhost:3000}"
+        - $FRONTEND_URL
   admin:
     host: 0.0.0.0
     port: 4445
 
 urls:
   self:
-    issuer: "${HYDRA_PUBLIC_URL:-http://localhost:4444/}"
-  consent: "${BACKEND_URL:-http://backend:8080}/oauth/consent"
-  login: "${BACKEND_URL:-http://backend:8080}/oauth/login"
-  logout: "${BACKEND_URL:-http://backend:8080}/oauth/logout"
+    issuer: $HYDRA_PUBLIC_URL
+  consent: $BACKEND_URL/oauth/consent
+  login: $BACKEND_URL/oauth/login
+  logout: $BACKEND_URL/oauth/logout
 
 strategies:
   access_token: opaque

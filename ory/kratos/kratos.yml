@@ -1,14 +1,14 @@
 version: v1.3.0
 
-dsn: "${KRATOS_DSN}"
+dsn: $KRATOS_DSN
 
 serve:
   public:
-    base_url: "${KRATOS_PUBLIC_BASE_URL:-http://localhost:4433/}"
+    base_url: $KRATOS_PUBLIC_BASE_URL
     cors:
       enabled: true
       allowed_origins:
-        - "${FRONTEND_URL:-http://localhost:3000}"
+        - $FRONTEND_URL
       allowed_methods:
         - GET
         - POST
@@ -27,7 +27,7 @@ serve:
     base_url: http://kratos:4434/
 
 selfservice:
-  default_browser_return_url: "${FRONTEND_URL:-http://localhost:3000/}"
+  default_browser_return_url: $FRONTEND_URL
 
   methods:
     password:
@@ -45,8 +45,8 @@ selfservice:
         providers:
           - id: google
             provider: google
-            client_id: "${GOOGLEAUTH_CLIENT_ID}"
-            client_secret: "${GOOGLEAUTH_CLIENT_SECRET}"
+            client_id: $GOOGLEAUTH_CLIENT_ID
+            client_secret: $GOOGLEAUTH_CLIENT_SECRET
             mapper_url: file:///etc/config/oidc.google.jsonnet
             scope:
               - openid
@@ -55,10 +55,10 @@ selfservice:
 
   flows:
     login:
-      ui_url: "${FRONTEND_URL:-http://localhost:3000}/login"
+      ui_url: $FRONTEND_URL/login
       lifespan: 10m
     registration:
-      ui_url: "${FRONTEND_URL:-http://localhost:3000}/registration"
+      ui_url: $FRONTEND_URL/registration
       lifespan: 10m
       after:
         password:
@@ -83,16 +83,16 @@ selfservice:
                   ignore: true
     logout:
       after:
-        default_browser_return_url: "${FRONTEND_URL:-http://localhost:3000/}"
+        default_browser_return_url: $FRONTEND_URL
     verification:
       enabled: true
-      ui_url: "${FRONTEND_URL:-http://localhost:3000}/verification"
+      ui_url: $FRONTEND_URL/verification
       use: code
       lifespan: 15m
       after:
-        default_browser_return_url: "${FRONTEND_URL:-http://localhost:3000}/"
+        default_browser_return_url: $FRONTEND_URL
     settings:
-      ui_url: "${FRONTEND_URL:-http://localhost:3000}/settings"
+      ui_url: $FRONTEND_URL/settings
 
 session:
   lifespan: 168h
@@ -108,9 +108,9 @@ identity:
 
 courier:
   smtp:
-    connection_uri: "${SMTP_CONNECTION_URI:-smtp://localhost:587/}"
-    from_address: "${SMTP_FROM_ADDRESS:-noreply@example.com}"
-    from_name: "${SMTP_FROM_NAME:-IoT Platform}"
+    connection_uri: $SMTP_CONNECTION_URI
+    from_address: $SMTP_FROM_ADDRESS
+    from_name: $SMTP_FROM_NAME
 
 log:
   level: info
