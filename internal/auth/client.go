@@ -40,7 +40,52 @@ type kratosSession struct {
 			Username string `json:"username"`
 			Email    string `json:"email"`
 		} `json:"traits"`
+		VerifiableAddresses []struct {
+			Value    string `json:"value"`
+			Via      string `json:"via"`
+			Verified bool   `json:"verified"`
+		} `json:"verifiable_addresses"`
 	} `json:"identity"`
+}
+
+// isEmailVerified checks whether any email address on the identity has been verified.
+func isEmailVerified(sess *kratosSession) bool {
+	for _, addr := range sess.Identity.VerifiableAddresses {
+		if addr.Via == "email" && addr.Verified {
+			return true
+		}
+	}
+	return len(sess.Identity.VerifiableAddresses) == 0
+}
+
+// checkIdentifierAvailable queries Kratos admin API to see if a credential identifier is already taken.
+func checkIdentifierAvailable(ctx context.Context, identifier string) (bool, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		kratosAdminURL+"/admin/identities?credentials_identifier="+url.QueryEscape(identifier), nil)
+	if err != nil {
+		return false, err
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return false, fmt.Errorf("kratos admin returned %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return false, err
+	}
+
+	var identities []json.RawMessage
+	if err := json.Unmarshal(body, &identities); err != nil {
+		return false, err
+	}
+	return len(identities) == 0, nil
 }
 
 // sessionCacheKey returns a Valkey key for caching validated Kratos sessions.

@@ -56,6 +56,12 @@ func RequireSession() gin.HandlerFunc {
 			return
 		}
 
+		// Reject unverified email addresses.
+		if !isEmailVerified(sess) {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "email_not_verified"})
+			return
+		}
+
 		// Look up the app user by Kratos identity ID.
 		var user models.User
 		if err := db.DB.Where("kratos_identity_id = ?", sess.Identity.ID).First(&user).Error; err != nil {

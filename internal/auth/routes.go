@@ -19,6 +19,12 @@ func SetupRoutes(r *gin.Engine) {
 		internal.POST("/hooks/registration", handleRegistrationHook)
 	}
 
+	// Auth API endpoints.
+	authAPI := r.Group("/api/auth")
+	{
+		authAPI.GET("/check-availability", handleCheckAvailability)
+	}
+
 	// Session info endpoint.
 	api := r.Group("/api/session")
 	{
@@ -46,6 +52,37 @@ func SetupRoutes(r *gin.Engine) {
 		oauth.POST("/consent", handleOAuthConsentDecision)
 		oauth.GET("/logout", handleOAuthLogout)
 	}
+}
+
+// handleCheckAvailability checks whether a username or email is already registered.
+func handleCheckAvailability(c *gin.Context) {
+	username := c.Query("username")
+	email := c.Query("email")
+
+	result := gin.H{}
+	ctx := c.Request.Context()
+
+	if username != "" {
+		available, err := checkIdentifierAvailable(ctx, username)
+		if err != nil {
+			log.Printf("error checking username availability: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to check availability"})
+			return
+		}
+		result["username_available"] = available
+	}
+
+	if email != "" {
+		available, err := checkIdentifierAvailable(ctx, email)
+		if err != nil {
+			log.Printf("error checking email availability: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to check availability"})
+			return
+		}
+		result["email_available"] = available
+	}
+
+	c.JSON(http.StatusOK, result)
 }
 
 // handleOAuthLogin handles the Hydra login challenge.

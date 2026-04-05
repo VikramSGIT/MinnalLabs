@@ -287,6 +287,7 @@ class AppShell extends HTMLElement {
               </p>
             </div>
             <div class="actions">
+              ${user ? '<button id="settingsBtn">Settings</button>' : ""}
               ${user ? '<button id="signOutBtn">Sign Out</button>' : ""}
               ${user && user.is_admin && page !== "admin" ? '<button id="openAdminBtn" class="primary">Firmware Admin</button>' : ""}
               ${user && user.is_admin && page === "admin" ? '<button id="closeAdminBtn" class="primary">Back To Enrollment</button>' : ""}
@@ -320,6 +321,13 @@ class AppShell extends HTMLElement {
         <div id="stage"></div>
       </div>
     `;
+
+    const settingsBtn = this.shadowRoot.getElementById("settingsBtn");
+    if (settingsBtn) {
+      settingsBtn.addEventListener("click", () => {
+        window.location.href = "/self-service/settings/browser";
+      });
+    }
 
     const signOutBtn = this.shadowRoot.getElementById("signOutBtn");
     if (signOutBtn) {
@@ -427,6 +435,10 @@ class AppShell extends HTMLElement {
       this.state.sessionError = "";
     } catch (error) {
       this.state.user = null;
+      if (error instanceof ApiError && error.status === 403 && error.payload && error.payload.error === "email_not_verified") {
+        window.location.href = "/self-service/verification/browser";
+        return;
+      }
       if (!(error instanceof ApiError && error.status === 401)) {
         this.state.sessionError = error.message;
       }

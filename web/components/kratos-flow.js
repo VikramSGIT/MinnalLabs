@@ -96,7 +96,43 @@ class KratosFlow extends HTMLElement {
     const form = this.shadowRoot.querySelector("form");
     if (!form) return;
 
+    // Registration: validate confirm password and check availability
+    if (this.flowType === "registration" && (!submitName || submitName !== "provider")) {
+      const password = form.querySelector('input[name="password"]');
+      const confirmPassword = this.shadowRoot.getElementById("confirm_password");
+      if (password && confirmPassword && password.value !== confirmPassword.value) {
+        this.error = "Passwords do not match.";
+        this.render();
+        return;
+      }
+
+      const username = form.querySelector('input[name="traits.username"]');
+      const email = form.querySelector('input[name="traits.email"]');
+      const params = new URLSearchParams();
+      if (username && username.value) params.set("username", username.value);
+      if (email && email.value) params.set("email", email.value);
+
+      if (params.toString()) {
+        try {
+          const checkResp = await fetch("/api/auth/check-availability?" + params.toString());
+          const checkData = await checkResp.json();
+          const errors = [];
+          if (checkData.username_available === false) errors.push("Username is already taken.");
+          if (checkData.email_available === false) errors.push("Email is already registered.");
+          if (errors.length > 0) {
+            this.error = errors.join(" ");
+            this.render();
+            return;
+          }
+        } catch (_) {
+          // If check fails, let Kratos handle validation
+        }
+      }
+    }
+
     const formData = new URLSearchParams(new FormData(form));
+    // Remove confirm_password — not a Kratos field
+    formData.delete("confirm_password");
     if (submitName) {
       formData.set(submitName, submitValue || "");
     }
@@ -114,23 +150,38 @@ class KratosFlow extends HTMLElement {
 
       const data = await resp.json();
 
+      // 422 or any response with redirect_browser_to — follow it (verification UI, OIDC, etc.)
       if (data.redirect_browser_to) {
         window.location.href = data.redirect_browser_to;
         return;
       }
 
+      // Check continue_with for verification flow redirect
+      if (data.continue_with && data.continue_with.length > 0) {
+        for (const action of data.continue_with) {
+          if (action.action === "show_verification_ui" && action.flow && action.flow.url) {
+            window.location.href = action.flow.url;
+            return;
+          }
+        }
+      }
+
+      // 400 with updated flow — validation errors (duplicates, invalid input, etc.)
       if (data.ui) {
         this.flow = data;
+        this.error = "";
         this.render();
         return;
       }
 
+      // 200 success with no redirect — go home
       if (resp.ok) {
         window.location.href = "/";
         return;
       }
 
-      this.error = data.error?.message || "Something went wrong.";
+      // Error object from Kratos
+      this.error = (data.error && data.error.message) || data.message || "Something went wrong.";
       this.render();
     } catch (err) {
       this.error = err.message;
@@ -351,6 +402,13 @@ class KratosFlow extends HTMLElement {
     if (groups.password) {
       html += '<div class="group-section">';
       html += this.renderNodes(groups.password);
+      // Add confirm password for registration
+      if (this.flowType === "registration") {
+        html +=
+          "<label>Confirm Password" +
+          '<input type="password" id="confirm_password" name="confirm_password" autocomplete="new-password" required>' +
+          "</label>";
+      }
       html += "</div>";
     }
 
