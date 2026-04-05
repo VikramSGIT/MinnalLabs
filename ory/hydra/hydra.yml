@@ -1,21 +1,10 @@
-dsn: $HYDRA_DSN
-
 serve:
   public:
     cors:
       enabled: true
-      allowed_origins:
-        - $FRONTEND_URL
   admin:
     host: 0.0.0.0
     port: 4445
-
-urls:
-  self:
-    issuer: $HYDRA_PUBLIC_URL
-  consent: $BACKEND_URL/oauth/consent
-  login: $BACKEND_URL/oauth/login
-  logout: $BACKEND_URL/oauth/logout
 
 strategies:
   access_token: opaque

@@ -60,14 +60,24 @@ services:
       - traefik.http.services.kratos.loadbalancer.server.port=4433
     environment:
       - DSN=${KRATOS_DSN}
-      - KRATOS_DSN=${KRATOS_DSN}
-      - KRATOS_PUBLIC_BASE_URL=https://${DOMAIN}/
-      - FRONTEND_URL=https://${DOMAIN}
-      - GOOGLEAUTH_CLIENT_ID=${GOOGLEAUTH_CLIENT_ID:-}
-      - GOOGLEAUTH_CLIENT_SECRET=${GOOGLEAUTH_CLIENT_SECRET:-}
-      - SMTP_CONNECTION_URI=${SMTP_CONNECTION_URI:-smtp://localhost:587/}
-      - SMTP_FROM_ADDRESS=${SMTP_FROM_ADDRESS:-noreply@example.com}
-      - SMTP_FROM_NAME=${SMTP_FROM_NAME:-IoT Platform}
+      # Serve
+      - SERVE_PUBLIC_BASE_URL=https://${DOMAIN}/
+      - SERVE_PUBLIC_CORS_ALLOWED_ORIGINS_0=https://${DOMAIN}
+      # Selfservice URLs
+      - SELFSERVICE_DEFAULT_BROWSER_RETURN_URL=https://${DOMAIN}/
+      - SELFSERVICE_FLOWS_LOGIN_UI_URL=https://${DOMAIN}/login
+      - SELFSERVICE_FLOWS_REGISTRATION_UI_URL=https://${DOMAIN}/registration
+      - SELFSERVICE_FLOWS_VERIFICATION_UI_URL=https://${DOMAIN}/verification
+      - SELFSERVICE_FLOWS_VERIFICATION_AFTER_DEFAULT_BROWSER_RETURN_URL=https://${DOMAIN}/
+      - SELFSERVICE_FLOWS_SETTINGS_UI_URL=https://${DOMAIN}/settings
+      - SELFSERVICE_FLOWS_LOGOUT_AFTER_DEFAULT_BROWSER_RETURN_URL=https://${DOMAIN}/
+      # OIDC
+      - SELFSERVICE_METHODS_OIDC_CONFIG_PROVIDERS_0_CLIENT_ID=${GOOGLEAUTH_CLIENT_ID:-}
+      - SELFSERVICE_METHODS_OIDC_CONFIG_PROVIDERS_0_CLIENT_SECRET=${GOOGLEAUTH_CLIENT_SECRET:-}
+      # Courier / SMTP
+      - COURIER_SMTP_CONNECTION_URI=${SMTP_CONNECTION_URI:-smtp://localhost:587/}
+      - COURIER_SMTP_FROM_ADDRESS=${SMTP_FROM_ADDRESS:-noreply@example.com}
+      - COURIER_SMTP_FROM_NAME=${SMTP_FROM_NAME:-IoT Platform}
     volumes:
       - ./ory/kratos/kratos.yml:/etc/config/kratos.yml:ro
       - ./ory/kratos/identity.schema.json:/etc/config/identity.schema.json:ro
@@ -100,10 +110,11 @@ services:
       - traefik.http.services.hydra.loadbalancer.server.port=4444
     environment:
       - DSN=${HYDRA_DSN}
-      - HYDRA_DSN=${HYDRA_DSN}
-      - HYDRA_PUBLIC_URL=https://${DOMAIN}/
-      - BACKEND_URL=http://backend:${BACKEND_PORT:-8080}
-      - FRONTEND_URL=https://${DOMAIN}
+      - URLS_SELF_ISSUER=https://${DOMAIN}/
+      - URLS_CONSENT=http://backend:${BACKEND_PORT:-8080}/oauth/consent
+      - URLS_LOGIN=http://backend:${BACKEND_PORT:-8080}/oauth/login
+      - URLS_LOGOUT=http://backend:${BACKEND_PORT:-8080}/oauth/logout
+      - SERVE_PUBLIC_CORS_ALLOWED_ORIGINS_0=https://${DOMAIN}
     volumes:
       - ./ory/hydra/hydra.yml:/etc/config/hydra.yml:ro
     restart: unless-stopped

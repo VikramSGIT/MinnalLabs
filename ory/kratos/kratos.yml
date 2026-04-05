@@ -1,14 +1,9 @@
 version: v1.3.0
 
-dsn: $KRATOS_DSN
-
 serve:
   public:
-    base_url: $KRATOS_PUBLIC_BASE_URL
     cors:
       enabled: true
-      allowed_origins:
-        - $FRONTEND_URL
       allowed_methods:
         - GET
         - POST
@@ -27,8 +22,6 @@ serve:
     base_url: http://kratos:4434/
 
 selfservice:
-  default_browser_return_url: $FRONTEND_URL
-
   methods:
     password:
       enabled: true
@@ -45,8 +38,6 @@ selfservice:
         providers:
           - id: google
             provider: google
-            client_id: $GOOGLEAUTH_CLIENT_ID
-            client_secret: $GOOGLEAUTH_CLIENT_SECRET
             mapper_url: file:///etc/config/oidc.google.jsonnet
             scope:
               - openid
@@ -55,10 +46,8 @@ selfservice:
 
   flows:
     login:
-      ui_url: $FRONTEND_URL/login
       lifespan: 10m
     registration:
-      ui_url: $FRONTEND_URL/registration
       lifespan: 10m
       after:
         password:
@@ -81,18 +70,12 @@ selfservice:
                 can_interrupt: false
                 response:
                   ignore: true
-    logout:
-      after:
-        default_browser_return_url: $FRONTEND_URL
+    logout: {}
     verification:
       enabled: true
-      ui_url: $FRONTEND_URL/verification
       use: code
       lifespan: 15m
-      after:
-        default_browser_return_url: $FRONTEND_URL
-    settings:
-      ui_url: $FRONTEND_URL/settings
+    settings: {}
 
 session:
   lifespan: 168h
@@ -105,12 +88,6 @@ identity:
   schemas:
     - id: user
       url: file:///etc/config/identity.schema.json
-
-courier:
-  smtp:
-    connection_uri: $SMTP_CONNECTION_URI
-    from_address: $SMTP_FROM_ADDRESS
-    from_name: $SMTP_FROM_NAME
 
 log:
   level: info
