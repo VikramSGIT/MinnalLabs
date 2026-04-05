@@ -6,8 +6,9 @@ const FRIENDLY_LABELS = {
   "traits.name": "Name",
   password: "Password",
   identifier: "Username or Email",
-  "password_identifier": "Username or Email",
+  password_identifier: "Username or Email",
   code: "Verification Code",
+  email: "Email",
 };
 
 // Map Kratos message IDs to user-friendly text.
@@ -50,8 +51,10 @@ function friendlyMessage(msg) {
   return msg.text || "";
 }
 
-function friendlyLabel(node) {
+function friendlyLabel(node, flowType) {
   const name = (node.attributes && node.attributes.name) || "";
+  // On verification page, "email" field is for confirming which email to verify
+  if (flowType === "verification" && name === "email") return "Email to Verify";
   if (FRIENDLY_LABELS[name]) return FRIENDLY_LABELS[name];
   const meta = node.meta && node.meta.label && node.meta.label.text;
   return meta || name;
@@ -555,7 +558,7 @@ class KratosFlow extends HTMLElement {
       }
 
       // Regular input
-      const label = friendlyLabel(node);
+      const label = friendlyLabel(node, this.flowType);
       return (
         "<label>" +
         escapeHtml(label) +
