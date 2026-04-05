@@ -12,7 +12,7 @@ strategies:
 ttl:
   access_token: 1h
   refresh_token: 720h
-  authorize_code: 10m
+  auth_code: 10m
 
 oauth2:
   expose_internal_errors: false
