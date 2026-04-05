@@ -1,5 +1,22 @@
 import { escapeHtml } from "../lib/html.js";
 
+const FRIENDLY_LABELS = {
+  "traits.username": "Username",
+  "traits.email": "Email",
+  "traits.name": "Name",
+  password: "Password",
+  identifier: "Username or Email",
+  "password_identifier": "Username or Email",
+  code: "Verification Code",
+};
+
+function friendlyLabel(node) {
+  const name = (node.attributes && node.attributes.name) || "";
+  if (FRIENDLY_LABELS[name]) return FRIENDLY_LABELS[name];
+  const meta = node.meta && node.meta.label && node.meta.label.text;
+  return meta || name;
+}
+
 class KratosFlow extends HTMLElement {
   constructor() {
     super();
@@ -398,6 +415,7 @@ class KratosFlow extends HTMLElement {
 
       if (attr.type === "submit") {
         const label = (node.meta && node.meta.label && node.meta.label.text) || attr.value || "Submit";
+        // Submit buttons use Kratos label directly (e.g. "Sign up", "Sign in")
 
         // OIDC provider buttons
         if (node.group === "oidc") {
@@ -425,7 +443,7 @@ class KratosFlow extends HTMLElement {
       }
 
       // Regular input
-      const label = (node.meta && node.meta.label && node.meta.label.text) || attr.name || "";
+      const label = friendlyLabel(node);
       return (
         "<label>" +
         escapeHtml(label) +

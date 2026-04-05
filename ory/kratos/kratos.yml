@@ -60,6 +60,7 @@ selfservice:
                 can_interrupt: false
                 response:
                   ignore: true
+            - hook: show_verification_ui
         oidc:
           hooks:
             - hook: web_hook
