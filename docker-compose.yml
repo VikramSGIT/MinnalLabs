@@ -34,10 +34,24 @@ services:
       - valkeydata:/data
     restart: unless-stopped
 
+  kratos-migrate:
+    image: oryd/kratos:v1.3
+    container_name: iot-kratos-migrate
+    command: migrate sql -e --yes
+    environment:
+      - DSN=${KRATOS_DSN}
+    volumes:
+      - ./ory/kratos/kratos.yml:/etc/config/kratos.yml:ro
+      - ./ory/kratos/identity.schema.json:/etc/config/identity.schema.json:ro
+    restart: "no"
+
   kratos:
     image: oryd/kratos:v1.3
     container_name: iot-kratos
-    command: sh -c "kratos migrate sql -e --yes && kratos serve -c /etc/config/kratos.yml --dev"
+    command: serve -c /etc/config/kratos.yml --dev
+    depends_on:
+      kratos-migrate:
+        condition: service_completed_successfully
     labels:
       - traefik.enable=true
       - traefik.http.routers.kratos.rule=Host(`${DOMAIN}`) && (PathPrefix(`/self-service/`) || PathPrefix(`/sessions/`) || PathPrefix(`/schemas/`))
@@ -61,10 +75,23 @@ services:
       - ./ory/kratos/registration-hook.jsonnet:/etc/config/registration-hook.jsonnet:ro
     restart: unless-stopped
 
+  hydra-migrate:
+    image: oryd/hydra:v2.3
+    container_name: iot-hydra-migrate
+    command: migrate sql -e --yes
+    environment:
+      - DSN=${HYDRA_DSN}
+    volumes:
+      - ./ory/hydra/hydra.yml:/etc/config/hydra.yml:ro
+    restart: "no"
+
   hydra:
     image: oryd/hydra:v2.3
     container_name: iot-hydra
-    command: sh -c "hydra migrate sql -e --yes && hydra serve all --config /etc/config/hydra.yml"
+    command: serve all --config /etc/config/hydra.yml
+    depends_on:
+      hydra-migrate:
+        condition: service_completed_successfully
     labels:
       - traefik.enable=true
       - traefik.http.routers.hydra.rule=Host(`${DOMAIN}`) && (PathPrefix(`/oauth2/`) || PathPrefix(`/.well-known/`))
