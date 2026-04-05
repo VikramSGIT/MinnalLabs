@@ -450,7 +450,18 @@ class KratosFlow extends HTMLElement {
 
     // Password group
     if (groups.password) {
+      // Check if Kratos sent a password input or only the submit button
+      const hasPasswordInput = groups.password.some(
+        (n) => n.type === "input" && n.attributes && n.attributes.type === "password",
+      );
       html += '<div class="group-section">';
+      if (!hasPasswordInput && (this.flowType === "registration" || this.flowType === "login")) {
+        // Kratos omitted the password input (multi-step flow) — inject it
+        html +=
+          "<label>Password" +
+          '<input type="password" name="password" autocomplete="new-password" required>' +
+          "</label>";
+      }
       html += this.renderNodes(groups.password);
       // Add confirm password for registration
       if (this.flowType === "registration") {
