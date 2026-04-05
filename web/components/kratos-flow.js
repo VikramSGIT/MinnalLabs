@@ -10,6 +10,46 @@ const FRIENDLY_LABELS = {
   code: "Verification Code",
 };
 
+// Map Kratos message IDs to user-friendly text.
+// See https://www.ory.sh/docs/kratos/concepts/ui-messages
+const FRIENDLY_MESSAGES = {
+  // Flow expired
+  4010001: "Session expired. Please try again.",
+  4040001: "Registration expired. Please try again.",
+  4050001: "Settings session expired. Please try again.",
+  4060005: "Recovery link expired. Please try again.",
+  4070005: "Verification code expired. Please try again.",
+  // Credentials
+  4000006: "Incorrect username or password.",
+  4010008: "Code is invalid or has already been used.",
+  4010010: "No account found with that address.",
+  // Duplicate account
+  4000007: "An account with these details already exists.",
+  4000027: "An account with these details already exists.",
+  4000028: "An account with these details already exists.",
+  // Password
+  4000005: "Password does not meet the requirements.",
+  4000031: "Password is too similar to your username or email.",
+  4000032: "Password is too short.",
+  4000033: "Password is too long.",
+  4000034: "This password has appeared in a data breach and cannot be used.",
+  // Validation
+  4000002: "Please fill in all required fields.",
+  4000004: "Invalid format. Please check your input.",
+  4000009: "Please enter your username or email.",
+  // Verification
+  4070001: "Verification link is invalid or has already been used.",
+  4070006: "Verification code is invalid or has already been used.",
+  // Registration code
+  4040003: "Code is invalid or has already been used.",
+};
+
+function friendlyMessage(msg) {
+  if (!msg) return "";
+  if (msg.id && FRIENDLY_MESSAGES[msg.id]) return FRIENDLY_MESSAGES[msg.id];
+  return msg.text || "";
+}
+
 function friendlyLabel(node) {
   const name = (node.attributes && node.attributes.name) || "";
   if (FRIENDLY_LABELS[name]) return FRIENDLY_LABELS[name];
@@ -384,7 +424,7 @@ class KratosFlow extends HTMLElement {
     if (ui.messages && ui.messages.length > 0) {
       for (const msg of ui.messages) {
         const cls = msg.type === "error" ? "banner-error" : "banner-info";
-        html += '<div class="' + cls + '">' + escapeHtml(msg.text) + "</div>";
+        html += '<div class="' + cls + '">' + escapeHtml(friendlyMessage(msg)) + "</div>";
       }
     }
 
@@ -554,7 +594,7 @@ class KratosFlow extends HTMLElement {
     let html = "";
     for (const msg of messages) {
       const cls = msg.type === "error" ? "msg-error" : msg.type === "success" ? "msg-success" : "msg-info";
-      html += '<div class="' + cls + '">' + escapeHtml(msg.text) + "</div>";
+      html += '<div class="' + cls + '">' + escapeHtml(friendlyMessage(msg)) + "</div>";
     }
     return html;
   }
