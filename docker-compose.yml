@@ -48,7 +48,7 @@ services:
   kratos:
     image: oryd/kratos:v1.3
     container_name: iot-kratos
-    command: serve -c /etc/config/kratos.yml --dev
+    command: serve -c /etc/config/kratos.yml --dev --watch-courier
     depends_on:
       kratos-migrate:
         condition: service_completed_successfully
