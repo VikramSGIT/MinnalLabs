@@ -1,7 +1,9 @@
 services:
   traefik:
-    image: traefik:v3.1
+    image: traefik:v3.6
     container_name: iot-traefik
+    environment:
+      - CF_DNS_API_TOKEN=${TRAEFIK_CF_DNS_API_TOKEN:?set TRAEFIK_CF_DNS_API_TOKEN}
     command:
       - --log.level=${TRAEFIK_LOG_LEVEL:-INFO}
       - --api.dashboard=true
@@ -14,8 +16,9 @@ services:
       - --certificatesresolvers.letsencrypt.acme.email=${TRAEFIK_ACME_EMAIL:?set TRAEFIK_ACME_EMAIL}
       - --certificatesresolvers.letsencrypt.acme.storage=${TRAEFIK_ACME_STORAGE:-/letsencrypt/acme.json}
       - --certificatesresolvers.letsencrypt.acme.caserver=${TRAEFIK_ACME_CA_SERVER:-https://acme-v02.api.letsencrypt.org/directory}
-      - --certificatesresolvers.letsencrypt.acme.httpchallenge=true
-      - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
+      - --certificatesresolvers.letsencrypt.acme.dnschallenge=true
+      - --certificatesresolvers.letsencrypt.acme.dnschallenge.provider=cloudflare
+      - --certificatesresolvers.letsencrypt.acme.dnschallenge.resolvers=1.1.1.1:53,1.0.0.1:53
     ports:
       - ${TRAEFIK_HTTP_PORT:-80}:80
       - ${TRAEFIK_HTTPS_PORT:-443}:443
@@ -29,7 +32,7 @@ services:
       - traefik.http.routers.dashboard.tls.certresolver=letsencrypt
       - traefik.http.routers.dashboard.service=api@internal
       - traefik.http.routers.dashboard.middlewares=dashboard-auth
-      - traefik.http.middlewares.dashboard-auth.basicauth.users=${TRAEFIK_DASHBOARD_AUTH:-}
+      - traefik.http.middlewares.dashboard-auth.basicauth.users=${TRAEFIK_DASHBOARD_AUTH:?set TRAEFIK_DASHBOARD_AUTH (htpasswd -nbB admin 'pass', escape $ as $$)}
     restart: unless-stopped
 
   valkey:
