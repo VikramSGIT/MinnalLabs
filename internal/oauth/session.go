@@ -103,6 +103,13 @@ func CurrentSessionUser(c *gin.Context) (SessionUser, bool) {
 	return user, ok
 }
 
+// SessionFromRequest returns the session user by reading the cookie directly.
+// Use this in handlers that are not behind RequireSession — e.g. an OAuth
+// callback that must run for both authenticated and unauthenticated flows.
+func SessionFromRequest(c *gin.Context) (SessionUser, bool) {
+	return restoreSessionFromRequest(c.Request)
+}
+
 func RequireSession() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		sessionUser, ok := restoreSessionFromRequest(c.Request)

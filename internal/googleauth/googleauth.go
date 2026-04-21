@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -20,9 +21,20 @@ import (
 	"github.com/iot-backend/internal/state"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
+	"gorm.io/gorm"
 )
 
 var sanitizeRe = regexp.MustCompile(`[^A-Za-z0-9_]`)
+
+const (
+	oauthIntentLogin = "login"
+	oauthIntentLink  = "link"
+)
+
+type oauthStatePayload struct {
+	Intent string `json:"intent"`
+	UserID uint   `json:"user_id,omitempty"`
+}
 
 func oauthConfig(cfg *config.Config) *oauth2.Config {
 	return &oauth2.Config{
@@ -38,6 +50,35 @@ func csrfStateKey(token string) string {
 	return "google_csrf:" + token
 }
 
+func storeOAuthState(payload oauthStatePayload) (string, error) {
+	stateToken, err := generateRandomToken(32)
+	if err != nil {
+		return "", err
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+	rdb := state.RedisClient()
+	if err := rdb.Set(context.Background(), csrfStateKey(stateToken), string(data), 10*time.Minute).Err(); err != nil {
+		return "", err
+	}
+	return stateToken, nil
+}
+
+func consumeOAuthState(stateToken string) (oauthStatePayload, error) {
+	rdb := state.RedisClient()
+	val, err := rdb.GetDel(context.Background(), csrfStateKey(stateToken)).Result()
+	if err != nil || val == "" {
+		return oauthStatePayload{}, errors.New("invalid or expired state")
+	}
+	var payload oauthStatePayload
+	if err := json.Unmarshal([]byte(val), &payload); err != nil {
+		return oauthStatePayload{}, errors.New("malformed state")
+	}
+	return payload, nil
+}
+
 // SetupGoogleAuthRoutes registers the production Google Sign-In routes.
 func SetupGoogleAuthRoutes(r *gin.Engine, cfg *config.Config) {
 	oc := oauthConfig(cfg)
@@ -48,14 +89,11 @@ func SetupGoogleAuthRoutes(r *gin.Engine, cfg *config.Config) {
 			return
 		}
 
-		stateToken, err := generateRandomToken(32)
+		stateToken, err := storeOAuthState(oauthStatePayload{Intent: oauthIntentLogin})
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate state"})
 			return
 		}
-
-		rdb := state.RedisClient()
-		rdb.Set(context.Background(), csrfStateKey(stateToken), "1", 10*time.Minute)
 
 		url := oc.AuthCodeURL(stateToken)
 		c.Redirect(http.StatusTemporaryRedirect, url)
@@ -73,10 +111,9 @@ func SetupGoogleAuthRoutes(r *gin.Engine, cfg *config.Config) {
 			return
 		}
 
-		rdb := state.RedisClient()
-		val, err := rdb.GetDel(context.Background(), csrfStateKey(stateToken)).Result()
-		if err != nil || val == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid or expired state"})
+		payload, err := consumeOAuthState(stateToken)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
 
@@ -98,24 +135,112 @@ func SetupGoogleAuthRoutes(r *gin.Engine, cfg *config.Config) {
 			return
 		}
 
-		user, err := findOrCreateGoogleUser(userInfo.Sub, userInfo.Email)
+		if !userInfo.EmailVerified {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "email not verified by Google"})
+			return
+		}
+
+		switch payload.Intent {
+		case oauthIntentLink:
+			handleGoogleLinkCallback(c, payload, userInfo)
+		case oauthIntentLogin:
+			handleGoogleLoginCallback(c, userInfo)
+		default:
+			c.JSON(http.StatusBadRequest, gin.H{"error": "unknown state intent"})
+		}
+	})
+
+	r.POST("/api/session/link-google", oauth.RequireSession(), func(c *gin.Context) {
+		if cfg.GoogleAuth.ClientID == "" || cfg.GoogleAuth.ClientSecret == "" {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Google Sign-In is not configured"})
+			return
+		}
+
+		sessionUser, ok := oauth.CurrentSessionUser(c)
+		if !ok {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+			return
+		}
+
+		var user localmodels.User
+		if err := db.DB.First(&user, sessionUser.UserID).Error; err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+			return
+		}
+		if user.GoogleSub != "" {
+			c.JSON(http.StatusConflict, gin.H{"error": "already linked"})
+			return
+		}
+
+		stateToken, err := storeOAuthState(oauthStatePayload{
+			Intent: oauthIntentLink,
+			UserID: sessionUser.UserID,
+		})
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create user"})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate state"})
 			return
 		}
 
-		if err := oauth.IssueSessionForUser(c, user); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to issue session"})
-			return
-		}
-
-		c.Redirect(http.StatusTemporaryRedirect, "/")
+		c.JSON(http.StatusOK, gin.H{"redirect_url": oc.AuthCodeURL(stateToken)})
 	})
 }
 
+func handleGoogleLoginCallback(c *gin.Context, userInfo *googleUserInfo) {
+	user, err := findOrCreateGoogleUser(userInfo.Sub, userInfo.Email)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create user"})
+		return
+	}
+
+	if err := oauth.IssueSessionForUser(c, user); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to issue session"})
+		return
+	}
+
+	c.Redirect(http.StatusTemporaryRedirect, "/")
+}
+
+func handleGoogleLinkCallback(c *gin.Context, payload oauthStatePayload, userInfo *googleUserInfo) {
+	sessionUser, ok := oauth.SessionFromRequest(c)
+	if !ok || sessionUser.UserID == 0 || sessionUser.UserID != payload.UserID {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "link session mismatch"})
+		return
+	}
+
+	var existingBySub localmodels.User
+	err := db.DB.Where("google_sub = ?", userInfo.Sub).First(&existingBySub).Error
+	if err == nil {
+		c.JSON(http.StatusConflict, gin.H{"error": "google account already linked"})
+		return
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to check google identity"})
+		return
+	}
+
+	var user localmodels.User
+	if err := db.DB.First(&user, payload.UserID).Error; err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "link session mismatch"})
+		return
+	}
+	if user.GoogleSub != "" {
+		c.JSON(http.StatusConflict, gin.H{"error": "account already has a linked google identity"})
+		return
+	}
+
+	user.GoogleSub = userInfo.Sub
+	if err := db.DB.Save(&user).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to link google identity"})
+		return
+	}
+
+	c.Redirect(http.StatusTemporaryRedirect, "/?linked=1")
+}
+
 type googleUserInfo struct {
-	Sub   string `json:"sub"`
-	Email string `json:"email"`
+	Sub           string `json:"sub"`
+	Email         string `json:"email"`
+	EmailVerified bool   `json:"email_verified"`
 }
 
 func fetchGoogleUserInfo(accessToken string) (*googleUserInfo, error) {
@@ -153,28 +278,18 @@ func FindOrCreateGoogleUser(googleSub, email string) (*localmodels.User, error) 
 }
 
 func findOrCreateGoogleUser(googleSub, email string) (*localmodels.User, error) {
-	// 1. Look up by google_sub
 	var existing localmodels.User
 	if err := db.DB.Where("google_sub = ?", googleSub).First(&existing).Error; err == nil {
 		return &existing, nil
 	}
 
-	// 2. Derive username from email
 	username := deriveUsername(email)
 
-	// 3. Check if username exists with empty google_sub — link it
 	var byUsername localmodels.User
 	if err := db.DB.Where("username = ?", username).First(&byUsername).Error; err == nil {
-		if byUsername.GoogleSub == "" {
-			byUsername.GoogleSub = googleSub
-			db.DB.Save(&byUsername)
-			return &byUsername, nil
-		}
-		// Username taken with different google_sub — append suffix
 		username = findAvailableUsername(username)
 	}
 
-	// 4. Create new user
 	newUser := localmodels.User{
 		Username:  username,
 		GoogleSub: googleSub,
@@ -192,11 +307,9 @@ func deriveUsername(email string) string {
 	}
 
 	username := sanitizeRe.ReplaceAllString(local, "_")
-	// Pad if too short
 	for len(username) < 3 {
 		username += "_"
 	}
-	// Truncate if too long
 	if len(username) > 64 {
 		username = username[:64]
 	}
@@ -215,7 +328,6 @@ func findAvailableUsername(base string) string {
 			return candidate
 		}
 	}
-	// Fallback: use a random suffix
 	token, _ := generateRandomToken(8)
 	return (base + "_" + token)[:64]
 }
