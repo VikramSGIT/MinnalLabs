@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/iot-backend/internal/config"
 	"github.com/iot-backend/internal/models"
 	"github.com/iot-backend/internal/mqtt"
 	"github.com/iot-backend/internal/state"
@@ -16,13 +17,42 @@ import (
 )
 
 const (
-	WorkerInterval                = 2 * time.Second
 	// Process a larger batch each tick so bursty home creation is handled quickly.
 	jobBatchSize                  = 128
 	staleClaimAfter               = 2 * time.Minute
 	maxProvisionAttempts          = 6
 	DeviceMQTTConnectDelaySeconds = 15
 )
+
+// Tick cadence and retry spacing are driven by env/config. Defaults preserve
+// historical behavior; override via HOMEJOBS_WORKER_INTERVAL, HOMEJOBS_INITIAL_DELAY,
+// HOMEJOBS_RETRY_BASE_DELAY, HOMEJOBS_RETRY_MAX_MULTIPLIER.
+var (
+	WorkerInterval     = 2 * time.Second
+	initialDelay       = 1 * time.Second
+	retryBaseDelay     = 5 * time.Second
+	retryMaxMultiplier = 6
+)
+
+// InitHomeJobs loads the scheduling constants from config. Safe to call once
+// at startup; callers that don't call it keep the defaults above.
+func InitHomeJobs(cfg *config.Config) {
+	if cfg == nil {
+		return
+	}
+	if cfg.HomeJobs.WorkerInterval > 0 {
+		WorkerInterval = cfg.HomeJobs.WorkerInterval
+	}
+	if cfg.HomeJobs.InitialDelay > 0 {
+		initialDelay = cfg.HomeJobs.InitialDelay
+	}
+	if cfg.HomeJobs.RetryBaseDelay > 0 {
+		retryBaseDelay = cfg.HomeJobs.RetryBaseDelay
+	}
+	if cfg.HomeJobs.RetryMaxMultiplier > 0 {
+		retryMaxMultiplier = cfg.HomeJobs.RetryMaxMultiplier
+	}
+}
 
 type Worker struct {
 	db *gorm.DB
@@ -33,7 +63,7 @@ func NewWorker(db *gorm.DB) *Worker {
 }
 
 func initialNextRunAt(now time.Time) time.Time {
-	return now.Add(1 * time.Second)
+	return now.Add(initialDelay)
 }
 
 func EnqueueProvision(tx *gorm.DB, homeID uint) error {
@@ -391,8 +421,8 @@ func retryDelay(attempts int) time.Duration {
 	if attempts < 1 {
 		attempts = 1
 	}
-	if attempts > 6 {
-		attempts = 6
+	if attempts > retryMaxMultiplier {
+		attempts = retryMaxMultiplier
 	}
-	return time.Duration(attempts) * 5 * time.Second
+	return time.Duration(attempts) * retryBaseDelay
 }

@@ -43,6 +43,7 @@ func main() {
 
 	mqtt.InitMQTT(cfg)
 	ota.StartWorker(cfg)
+	homejobs.InitHomeJobs(cfg)
 	workerCtx, workerCancel := context.WithCancel(context.Background())
 	homejobs.NewWorker(db.DB).Start(workerCtx)
 

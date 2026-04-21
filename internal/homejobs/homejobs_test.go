@@ -9,7 +9,7 @@ import (
 
 func TestInitialNextRunAt(t *testing.T) {
 	now := time.Date(2026, time.March, 30, 12, 0, 0, 0, time.UTC)
-	want := now.Add(WorkerInterval)
+	want := now.Add(initialDelay)
 
 	if got := initialNextRunAt(now); !got.Equal(want) {
 		t.Fatalf("initialNextRunAt(%s) = %s, want %s", now, got, want)
@@ -20,19 +20,18 @@ func TestRetryDelay(t *testing.T) {
 	cases := []struct {
 		name     string
 		attempts int
-		want     int
+		want     time.Duration
 	}{
-		{name: "normalizes zero attempt", attempts: 0, want: 1},
-		{name: "scales linearly", attempts: 3, want: 3},
-		{name: "caps large attempt", attempts: 9, want: 6},
+		{name: "normalizes zero attempt", attempts: 0, want: retryBaseDelay},
+		{name: "scales linearly", attempts: 3, want: 3 * retryBaseDelay},
+		{name: "caps large attempt", attempts: 9, want: time.Duration(retryMaxMultiplier) * retryBaseDelay},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			got := retryDelay(tc.attempts)
-			want := time.Duration(tc.want) * WorkerInterval
-			if got != want {
-				t.Fatalf("retryDelay(%d) = %s, want %s", tc.attempts, got, want)
+			if got != tc.want {
+				t.Fatalf("retryDelay(%d) = %s, want %s", tc.attempts, got, tc.want)
 			}
 		})
 	}

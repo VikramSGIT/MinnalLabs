@@ -64,6 +64,12 @@ type Config struct {
 		Enabled bool
 		Addr    string
 	}
+	HomeJobs struct {
+		WorkerInterval     time.Duration `mapstructure:"worker_interval"`
+		InitialDelay       time.Duration `mapstructure:"initial_delay"`
+		RetryBaseDelay     time.Duration `mapstructure:"retry_base_delay"`
+		RetryMaxMultiplier int           `mapstructure:"retry_max_multiplier"`
+	}
 }
 
 func LoadConfig() *Config {
@@ -111,6 +117,10 @@ func LoadConfig() *Config {
 	viper.SetDefault("googleauth.redirect_uri", "")
 	viper.SetDefault("pprof.enabled", false)
 	viper.SetDefault("pprof.addr", "127.0.0.1:6060")
+	viper.SetDefault("homejobs.worker_interval", "2s")
+	viper.SetDefault("homejobs.initial_delay", "1s")
+	viper.SetDefault("homejobs.retry_base_delay", "5s")
+	viper.SetDefault("homejobs.retry_max_multiplier", 6)
 
 	if err := viper.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
