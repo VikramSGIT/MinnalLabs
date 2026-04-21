@@ -28,6 +28,7 @@ FROM caddy:2.10-alpine
 WORKDIR /srv
 
 COPY --from=builder /build/dist /srv
+COPY privacy-policy.html /srv/privacy-policy.html
 COPY Caddyfile /etc/caddy/Caddyfile
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
