@@ -25,9 +25,9 @@ const FRIENDLY_MESSAGES = {
   4010008: "Code is invalid or has already been used.",
   4010010: "No account found with that address.",
   // Duplicate account
-  4000007: "An account with these details already exists.",
-  4000027: "An account with these details already exists.",
-  4000028: "An account with these details already exists.",
+  4000007: null, // handled specially in renderBody
+  4000027: null,
+  4000028: null,
   // Password
   4000005: "Password does not meet the requirements.",
   4000031: "Password is too similar to your username or email.",
@@ -45,8 +45,11 @@ const FRIENDLY_MESSAGES = {
   4040003: "Code is invalid or has already been used.",
 };
 
+const DUPLICATE_IDS = new Set([4000007, 4000027, 4000028]);
+
 function friendlyMessage(msg) {
   if (!msg) return "";
+  if (msg.id && DUPLICATE_IDS.has(msg.id)) return null;
   if (msg.id && FRIENDLY_MESSAGES[msg.id]) return FRIENDLY_MESSAGES[msg.id];
   return msg.text || "";
 }
@@ -85,9 +88,8 @@ class KratosFlow extends HTMLElement {
     if (!flowId) {
       const returnTo = params.get("return_to");
       const initUrl =
-        "/self-service/" +
+        "/api/auth/" +
         this.flowType +
-        "/browser" +
         (returnTo ? "?return_to=" + encodeURIComponent(returnTo) : "");
       window.location.href = initUrl;
       return;
@@ -181,35 +183,28 @@ class KratosFlow extends HTMLElement {
     }
 
     try {
-      const resp = await fetch(this.flow.ui.action, {
-        method: this.flow.ui.method || "POST",
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-          Accept: "application/json",
+      const resp = await fetch(
+        "/api/auth/submit/" + this.flowType + "?flow=" + encodeURIComponent(this.flow.id),
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded",
+            Accept: "application/json",
+          },
+          credentials: "include",
+          body: formData.toString(),
         },
-        credentials: "include",
-        body: formData.toString(),
-      });
+      );
 
       const data = await resp.json();
 
-      // 422 or any response with redirect_browser_to — follow it (verification UI, OIDC, etc.)
-      if (data.redirect_browser_to) {
-        window.location.href = data.redirect_browser_to;
+      // Backend returns redirect_to for navigation (success, OIDC, verification, etc.)
+      if (data.redirect_to) {
+        window.location.href = data.redirect_to;
         return;
       }
 
-      // Check continue_with for verification flow redirect
-      if (data.continue_with && data.continue_with.length > 0) {
-        for (const action of data.continue_with) {
-          if (action.action === "show_verification_ui" && action.flow && action.flow.url) {
-            window.location.href = action.flow.url;
-            return;
-          }
-        }
-      }
-
-      // 400 with updated flow — validation errors (duplicates, invalid input, etc.)
+      // Validation errors — re-render with updated flow
       if (data.ui) {
         this.flow = data;
         this.error = "";
@@ -217,14 +212,8 @@ class KratosFlow extends HTMLElement {
         return;
       }
 
-      // 200 success with no redirect — go home
-      if (resp.ok) {
-        window.location.href = "/";
-        return;
-      }
-
-      // Error object from Kratos
-      this.error = (data.error && data.error.message) || data.message || "Something went wrong.";
+      // Error from backend
+      this.error = (data.error && data.error.message) || data.error || data.message || "Something went wrong.";
       this.render();
     } catch (err) {
       this.error = err.message;
@@ -406,7 +395,7 @@ class KratosFlow extends HTMLElement {
     if (this.error && !this.flow) {
       return `
         <div class="banner-error">${escapeHtml(this.error)}</div>
-        <p><a href="/self-service/${this.flowType}/browser">Try again</a></p>
+        <p><a href="/api/auth/${this.flowType}">Try again</a></p>
       `;
     }
 
@@ -425,9 +414,22 @@ class KratosFlow extends HTMLElement {
 
     // Global messages
     if (ui.messages && ui.messages.length > 0) {
+      const hasDuplicate = ui.messages.some((m) => DUPLICATE_IDS.has(m.id));
+      if (hasDuplicate) {
+        html +=
+          '<div class="banner-info">' +
+          "An account with this email or username already exists. " +
+          '<a href="/api/auth/login">Sign in</a>' +
+          " or " +
+          '<a href="/api/auth/verification">verify your email</a>' +
+          " if you haven't yet." +
+          "</div>";
+      }
       for (const msg of ui.messages) {
+        const text = friendlyMessage(msg);
+        if (text === null) continue;
         const cls = msg.type === "error" ? "banner-error" : "banner-info";
-        html += '<div class="' + cls + '">' + escapeHtml(friendlyMessage(msg)) + "</div>";
+        html += '<div class="' + cls + '">' + escapeHtml(text) + "</div>";
       }
     }
 
@@ -524,14 +526,14 @@ class KratosFlow extends HTMLElement {
     // Footer links
     if (this.flowType === "login") {
       html +=
-        '<div class="footer">Don\'t have an account? <a href="/self-service/registration/browser">Sign up</a></div>';
+        '<div class="footer">Don\'t have an account? <a href="/api/auth/registration">Sign up</a></div>';
     } else if (this.flowType === "registration") {
       html +=
-        '<div class="footer">Already have an account? <a href="/self-service/login/browser">Sign in</a></div>';
+        '<div class="footer">Already have an account? <a href="/api/auth/login">Sign in</a></div>';
     } else if (this.flowType === "verification") {
       html +=
-        '<div class="footer"><a href="/self-service/verification/browser">Resend code</a>' +
-        ' &middot; <a href="/self-service/login/browser">Back to sign in</a></div>';
+        '<div class="footer"><a href="/api/auth/verification">Resend code</a>' +
+        ' &middot; <a href="/api/auth/login">Back to sign in</a></div>';
     } else if (this.flowType === "settings") {
       html +=
         '<div class="footer"><a href="/">Back to home</a></div>';
@@ -631,8 +633,10 @@ class KratosFlow extends HTMLElement {
     if (!messages || messages.length === 0) return "";
     let html = "";
     for (const msg of messages) {
+      const text = friendlyMessage(msg);
+      if (text === null) continue; // handled at global level (e.g. duplicate account)
       const cls = msg.type === "error" ? "msg-error" : msg.type === "success" ? "msg-success" : "msg-info";
-      html += '<div class="' + cls + '">' + escapeHtml(friendlyMessage(msg)) + "</div>";
+      html += '<div class="' + cls + '">' + escapeHtml(text) + "</div>";
     }
     return html;
   }

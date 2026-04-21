@@ -5,6 +5,7 @@ import (
 	"html/template"
 	"log"
 	"net/http"
+	"net/url"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
@@ -18,6 +19,25 @@ func SetupRoutes(r *gin.Engine) {
 	authAPI := r.Group("/api/auth")
 	{
 		authAPI.GET("/check-availability", handleCheckAvailability)
+
+		// Flow initiation — redirect browser to Kratos to create a new flow.
+		authAPI.GET("/login", handleFlowInit("login"))
+		authAPI.GET("/registration", handleFlowInit("registration"))
+		authAPI.GET("/verification", handleFlowInit("verification"))
+		authAPI.GET("/settings", RequireSession(), handleFlowInit("settings"))
+		authAPI.GET("/logout", handleLogout)
+
+		// Kratos UI callbacks — receive flow ID from Kratos, redirect to frontend page.
+		authUI := authAPI.Group("/ui")
+		{
+			authUI.GET("/login", handleFlowUI("login"))
+			authUI.GET("/registration", handleFlowUI("registration"))
+			authUI.GET("/verification", handleFlowUI("verification"))
+			authUI.GET("/settings", handleFlowUI("settings"))
+		}
+
+		// Form submission proxy — forward to Kratos, interpret response.
+		authAPI.POST("/submit/:type", handleFlowSubmit)
 	}
 
 	// Session info endpoint.
@@ -135,7 +155,7 @@ func handleOAuthLogin(c *gin.Context) {
 
 func redirectToLogin(c *gin.Context, challenge string) {
 	selfURL := fmt.Sprintf("%s/oauth/login?login_challenge=%s", backendPublicURL(c.Request), challenge)
-	loginURL := fmt.Sprintf("%s/login?return_to=%s", frontendURL, selfURL)
+	loginURL := fmt.Sprintf("%s/api/auth/login?return_to=%s", backendPublicURL(c.Request), url.QueryEscape(selfURL))
 	c.Redirect(http.StatusFound, loginURL)
 }
 

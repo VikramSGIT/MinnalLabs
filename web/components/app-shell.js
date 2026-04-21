@@ -27,7 +27,7 @@ class AppShell extends HTMLElement {
   connectedCallback() {
     if (!this.sessionEventsBound) {
       this.shadowRoot.addEventListener("session-expired", () => {
-        window.location.href = "/self-service/login/browser";
+        window.location.href = "/api/auth/login";
       });
       window.addEventListener("popstate", () => {
         this.resolveRoute();
@@ -45,7 +45,7 @@ class AppShell extends HTMLElement {
     } else if (this.state.route === "settings") {
       this.bootstrapSession().then(() => {
         if (!this.state.user) {
-          window.location.href = "/self-service/login/browser?return_to=/settings";
+          window.location.href = "/api/auth/login?return_to=/settings";
         }
       });
     } else {
@@ -325,7 +325,7 @@ class AppShell extends HTMLElement {
     const settingsBtn = this.shadowRoot.getElementById("settingsBtn");
     if (settingsBtn) {
       settingsBtn.addEventListener("click", () => {
-        window.location.href = "/self-service/settings/browser";
+        window.location.href = "/api/auth/settings";
       });
     }
 
@@ -384,7 +384,7 @@ class AppShell extends HTMLElement {
     }
 
     if (!this.state.user) {
-      window.location.href = "/self-service/login/browser";
+      window.location.href = "/api/auth/login";
       return;
     }
 
@@ -435,7 +435,7 @@ class AppShell extends HTMLElement {
     } catch (error) {
       this.state.user = null;
       if (error instanceof ApiError && error.status === 403 && error.payload && error.payload.error === "email_not_verified") {
-        window.location.href = "/self-service/verification/browser";
+        window.location.href = "/api/auth/verification";
         return;
       }
       if (!(error instanceof ApiError && error.status === 401)) {
@@ -447,19 +447,8 @@ class AppShell extends HTMLElement {
     }
   }
 
-  async handleSignOut() {
-    try {
-      const resp = await fetch("/self-service/logout/browser", {
-        headers: { Accept: "application/json" },
-        credentials: "include",
-      });
-      if (!resp.ok) throw new Error("Failed to create logout flow");
-      const data = await resp.json();
-      window.location.href = data.logout_url;
-    } catch (error) {
-      this.state.sessionError = error.message;
-      this.render();
-    }
+  handleSignOut() {
+    window.location.href = "/api/auth/logout";
   }
 }
 
