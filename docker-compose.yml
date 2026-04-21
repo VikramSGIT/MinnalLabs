@@ -1,9 +1,40 @@
 services:
+  traefik:
+    image: traefik:v3.1
+    container_name: iot-traefik
+    command:
+      - --log.level=${TRAEFIK_LOG_LEVEL:-INFO}
+      - --api.dashboard=true
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --certificatesresolvers.letsencrypt.acme.email=${TRAEFIK_ACME_EMAIL:?set TRAEFIK_ACME_EMAIL}
+      - --certificatesresolvers.letsencrypt.acme.storage=${TRAEFIK_ACME_STORAGE:-/letsencrypt/acme.json}
+      - --certificatesresolvers.letsencrypt.acme.caserver=${TRAEFIK_ACME_CA_SERVER:-https://acme-v02.api.letsencrypt.org/directory}
+      - --certificatesresolvers.letsencrypt.acme.httpchallenge=true
+      - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
+    ports:
+      - ${TRAEFIK_HTTP_PORT:-80}:80
+      - ${TRAEFIK_HTTPS_PORT:-443}:443
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - letsencrypt:/letsencrypt
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.dashboard.rule=Host(`${TRAEFIK_DASHBOARD_HOST}`)
+      - traefik.http.routers.dashboard.entrypoints=websecure
+      - traefik.http.routers.dashboard.tls.certresolver=letsencrypt
+      - traefik.http.routers.dashboard.service=api@internal
+      - traefik.http.routers.dashboard.middlewares=dashboard-auth
+      - traefik.http.middlewares.dashboard-auth.basicauth.users=${TRAEFIK_DASHBOARD_AUTH:-}
+    restart: unless-stopped
+
   valkey:
     image: valkey/valkey:8-alpine
     container_name: iot-valkey
-    ports:
-      - 6379:6379
     volumes:
       - valkeydata:/data
     restart: unless-stopped
@@ -11,8 +42,6 @@ services:
   backend:
     build: .
     container_name: iot-backend
-    ports:
-      - 8080:8080
     volumes:
       - ./firmware:/app/firmware
     environment:
@@ -26,14 +55,20 @@ services:
       - MQTT_PORT=${MQTT_PORT}
       - MQTT_USERNAME=${MQTT_USERNAME}
       - MQTT_PASSWORD=${MQTT_PASSWORD}
-      - FRONTEND_ALLOWED_ORIGINS=${FRONTEND_ALLOWED_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
-      - SESSION_SECURE=${SESSION_SECURE:-false}
+      - FRONTEND_ALLOWED_ORIGINS=${FRONTEND_ALLOWED_ORIGINS:-https://${TRAEFIK_DOMAIN}}
+      - SESSION_SECURE=${SESSION_SECURE:-true}
       - OAUTH_CLIENT_SECRET=${OAUTH_CLIENT_SECRET:?set OAUTH_CLIENT_SECRET}
       - GOOGLEAUTH_CLIENT_ID=${GOOGLEAUTH_CLIENT_ID:-}
       - GOOGLEAUTH_CLIENT_SECRET=${GOOGLEAUTH_CLIENT_SECRET:-}
       - GOOGLEAUTH_REDIRECT_URI=${GOOGLEAUTH_REDIRECT_URI:-}
       - VALKEY_ADDR=valkey:6379
       - FIRMWARE_STORAGE_DIR=/app/firmware
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.backend.rule=Host(`${TRAEFIK_DOMAIN}`) && (PathPrefix(`/api`) || PathPrefix(`/auth`) || PathPrefix(`/oauth`) || Path(`/login`))
+      - traefik.http.routers.backend.entrypoints=websecure
+      - traefik.http.routers.backend.tls.certresolver=letsencrypt
+      - traefik.http.services.backend.loadbalancer.server.port=8080
     depends_on:
       - valkey
     restart: unless-stopped
@@ -41,24 +76,33 @@ services:
   caddy:
     image: caddy:2-alpine
     container_name: iot-firmware-caddy
-    ports:
-      - 8081:80
     volumes:
       - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - ./firmware:/srv/firmware:ro
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.firmware.rule=Host(`${TRAEFIK_DOMAIN}`) && PathPrefix(`/firmware`)
+      - traefik.http.routers.firmware.entrypoints=websecure
+      - traefik.http.routers.firmware.tls.certresolver=letsencrypt
+      - traefik.http.services.firmware.loadbalancer.server.port=80
     restart: unless-stopped
 
   frontend:
     build:
       context: ./web
     container_name: iot-frontend
-    ports:
-      - 3000:80
     environment:
-      - API_BASE_URL=${FRONTEND_API_BASE_URL:-http://localhost:8080}
+      - API_BASE_URL=${FRONTEND_API_BASE_URL:-https://${TRAEFIK_DOMAIN}}
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.frontend.rule=Host(`${TRAEFIK_DOMAIN}`)
+      - traefik.http.routers.frontend.entrypoints=websecure
+      - traefik.http.routers.frontend.tls.certresolver=letsencrypt
+      - traefik.http.services.frontend.loadbalancer.server.port=80
     depends_on:
       - backend
     restart: unless-stopped
 
 volumes:
   valkeydata:
+  letsencrypt:
